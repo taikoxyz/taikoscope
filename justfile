@@ -16,7 +16,9 @@ dev:
 
 # start the API server for local development (optimized for fast compilation)
 dev-api:
-    ENV_FILE=hekla.env cargo run --profile dev-fast --bin api-server
+    ENV_FILE=hekla.env cargo run --profile dev-fast --bin api-server -- \
+    --gap-min-l1-block 1 \
+    --gap-min-l2-block 1
 
 # start the API server for mainnet (optimized for fast compilation)
 mainnet-api:
