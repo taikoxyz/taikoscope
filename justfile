@@ -9,15 +9,22 @@ default:
 
 # start the Taikoscope binary for local development (optimized for fast compilation)
 dev:
-    ENV_FILE=hekla.env ENABLE_DB_WRITES=false ENABLE_GAP_DETECTION=false INSTATUS_MONITORS_ENABLED=false cargo run --profile dev-fast --bin taikoscope
+    ENV_FILE=hekla.env ENABLE_DB_WRITES=false ENABLE_GAP_DETECTION=false INSTATUS_MONITORS_ENABLED=false \
+    cargo run --profile dev-fast --bin taikoscope -- \
+    --gap-min-l1-block 1 \
+    --gap-min-l2-block 1
 
 # start the API server for local development (optimized for fast compilation)
 dev-api:
-    ENV_FILE=hekla.env cargo run --profile dev-fast --bin api-server
+    ENV_FILE=hekla.env cargo run --profile dev-fast --bin api-server -- \
+    --gap-min-l1-block 1 \
+    --gap-min-l2-block 1
 
 # start the API server for mainnet (optimized for fast compilation)
 mainnet-api:
-    ENV_FILE=mainnet.env cargo run --profile dev-fast --bin api-server
+    ENV_FILE=mainnet.env cargo run --profile dev-fast --bin api-server -- \
+    --gap-min-l1-block 1 \
+    --gap-min-l2-block 1
 
 # Check code (fastest compile check without codegen)
 check:
