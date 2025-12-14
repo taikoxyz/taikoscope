@@ -14,7 +14,7 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS ${DB}.batch_prove_times_mv
 ) ENGINE = MergeTree()
 ORDER BY (proved_day, proved_hour, batch_id)
 AS SELECT
-    p.batch_id,
+    p.batch_id AS batch_id,
     (l1_proved.block_ts - l1_proposed.block_ts) * 1000 AS prove_time_ms,
     fromUnixTimestamp(l1_proved.block_ts) AS proved_at
 FROM ${DB}.proved_batches p
@@ -38,7 +38,7 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS ${DB}.batch_verify_times_mv
 ) ENGINE = MergeTree()
 ORDER BY (verified_day, verified_hour, batch_id)
 AS SELECT
-    v.batch_id,
+    v.batch_id AS batch_id,
     (l1_verified.block_ts - l1_proved.block_ts) * 1000 AS verify_time_ms,
     fromUnixTimestamp(l1_verified.block_ts) AS verified_at
 FROM ${DB}.verified_batches v
