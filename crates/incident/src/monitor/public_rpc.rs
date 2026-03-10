@@ -130,8 +130,36 @@ async fn resolve_if_needed(
         return;
     };
 
-    if resolve(client, component_id, &id).await.is_ok() {
-        *incident_id = None;
+    match resolve(client, component_id, &id).await {
+        Ok(()) => {
+            *incident_id = None;
+        }
+        Err(e) => {
+            error!(error = %e, incident_id = %id, "failed to resolve incident");
+
+            match client.incident_exists(&id).await {
+                Ok(true) => {
+                    warn!(
+                        incident_id = %id,
+                        "incident still exists after resolve failure, keeping it cached"
+                    );
+                }
+                Ok(false) => {
+                    warn!(
+                        incident_id = %id,
+                        "incident missing after resolve failure, clearing cached id"
+                    );
+                    *incident_id = None;
+                }
+                Err(exists_err) => {
+                    warn!(
+                        error = %exists_err,
+                        incident_id = %id,
+                        "failed to check incident existence after resolve failure"
+                    );
+                }
+            }
+        }
     }
 }
 
@@ -163,6 +191,13 @@ mod tests {
             .with_body(r#"{"error":"temporary failure"}"#)
             .create_async()
             .await;
+        let exists_mock = server
+            .mock("GET", "/v1/page1/incidents/inc1")
+            .match_header("authorization", "Bearer testkey")
+            .with_status(200)
+            .with_body(r#"{"id":"inc1"}"#)
+            .create_async()
+            .await;
 
         let incident_client = IncidentClient::with_base_url(
             "testkey".into(),
@@ -184,7 +219,153 @@ mod tests {
 
         assert_eq!(incident_id.as_deref(), Some("inc1"));
         put_mock.assert_async().await;
+        exists_mock.assert_async().await;
         rpc_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn clears_incident_id_when_resolution_fails_for_missing_incident() {
+        let mut server = Server::new_async().await;
+        let rpc_mock = server
+            .mock("POST", "/")
+            .with_status(200)
+            .with_body(r#"{"jsonrpc":"2.0","id":1,"result":false}"#)
+            .create_async()
+            .await;
+
+        let put_mock = server
+            .mock("PUT", "/v1/page1/incidents/inc1")
+            .match_header("authorization", "Bearer testkey")
+            .match_header("content-type", "application/json")
+            .with_status(404)
+            .with_body(r#"{"error":"not found"}"#)
+            .create_async()
+            .await;
+        let exists_mock = server
+            .mock("GET", "/v1/page1/incidents/inc1")
+            .match_header("authorization", "Bearer testkey")
+            .with_status(404)
+            .with_body("not found")
+            .create_async()
+            .await;
+
+        let incident_client = IncidentClient::with_base_url(
+            "testkey".into(),
+            "page1".into(),
+            server.url().parse().unwrap(),
+        );
+        let rpc_client = Client::new();
+        let rpc_url: Url = server.url().parse().unwrap();
+        let component_id = "comp1".to_owned();
+        let mut incident_id = Some("inc1".to_owned());
+
+        check_once(
+            &rpc_client,
+            &rpc_url,
+            Some((&incident_client, &component_id)),
+            &mut incident_id,
+        )
+        .await;
+
+        assert!(incident_id.is_none());
+        put_mock.assert_async().await;
+        exists_mock.assert_async().await;
+        rpc_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn opens_new_incident_after_clearing_stale_incident_id() {
+        let mut server = Server::new_async().await;
+        let healthy_rpc_mock = server
+            .mock("POST", "/")
+            .expect(1)
+            .with_status(200)
+            .with_body(r#"{"jsonrpc":"2.0","id":1,"result":false}"#)
+            .create_async()
+            .await;
+        let outage_probe_mock = server
+            .mock("POST", "/")
+            .expect(1)
+            .with_status(200)
+            .with_body(r#"{"jsonrpc":"2.0","id":1,"result":true}"#)
+            .create_async()
+            .await;
+        let outage_retry_mock = server
+            .mock("POST", "/")
+            .expect(1)
+            .with_status(200)
+            .with_body(r#"{"jsonrpc":"2.0","id":1,"result":true}"#)
+            .create_async()
+            .await;
+
+        let stale_resolve_mock = server
+            .mock("PUT", "/v1/page1/incidents/inc1")
+            .match_header("authorization", "Bearer testkey")
+            .match_header("content-type", "application/json")
+            .with_status(404)
+            .with_body(r#"{"error":"not found"}"#)
+            .create_async()
+            .await;
+        let stale_exists_mock = server
+            .mock("GET", "/v1/page1/incidents/inc1")
+            .match_header("authorization", "Bearer testkey")
+            .with_status(404)
+            .with_body("not found")
+            .create_async()
+            .await;
+        let open_incident_mock = server
+            .mock("GET", "/v1/page1/incidents")
+            .match_header("authorization", "Bearer testkey")
+            .match_query(Matcher::Any)
+            .with_status(200)
+            .with_body("[]")
+            .create_async()
+            .await;
+        let create_incident_mock = server
+            .mock("POST", "/v1/page1/incidents")
+            .match_header("authorization", "Bearer testkey")
+            .match_header("content-type", "application/json")
+            .with_status(200)
+            .with_body(r#"{"id":"inc2"}"#)
+            .create_async()
+            .await;
+
+        let incident_client = IncidentClient::with_base_url(
+            "testkey".into(),
+            "page1".into(),
+            server.url().parse().unwrap(),
+        );
+        let rpc_client = Client::new();
+        let rpc_url: Url = server.url().parse().unwrap();
+        let component_id = "comp1".to_owned();
+        let mut incident_id = Some("inc1".to_owned());
+
+        check_once(
+            &rpc_client,
+            &rpc_url,
+            Some((&incident_client, &component_id)),
+            &mut incident_id,
+        )
+        .await;
+        assert!(incident_id.is_none());
+
+        check_once_with_retry_delay(
+            &rpc_client,
+            &rpc_url,
+            Some((&incident_client, &component_id)),
+            &mut incident_id,
+            Duration::ZERO,
+        )
+        .await;
+        assert_eq!(incident_id.as_deref(), Some("inc2"));
+
+        healthy_rpc_mock.assert_async().await;
+        outage_probe_mock.assert_async().await;
+        outage_retry_mock.assert_async().await;
+        stale_resolve_mock.assert_async().await;
+        stale_exists_mock.assert_async().await;
+        open_incident_mock.assert_async().await;
+        create_incident_mock.assert_async().await;
     }
 
     #[tokio::test]
