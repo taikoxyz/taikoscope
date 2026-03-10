@@ -10,7 +10,7 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   REGISTRY_TAIKOSCOPE: us-central1-docker.pkg.dev/taikoscope/taikoscope/taikoscope
@@ -39,7 +39,7 @@ jobs:
       - name: Login to GAR
         uses: docker/login-action@v3
         with:
-          registry: us-docker.pkg.dev
+          registry: us-central1-docker.pkg.dev
           username: _json_key
           password: ${{ secrets.GAR_JSON_KEY }}
 
