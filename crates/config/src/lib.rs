@@ -47,9 +47,6 @@ pub struct TaikoAddressOpts {
     /// Taiko preconf whitelist contract address
     #[clap(long, env = "TAIKO_PRECONF_WHITELIST_ADDRESS")]
     pub preconf_whitelist_address: Address,
-    /// Taiko wrapper contract address
-    #[clap(long, env = "TAIKO_WRAPPER_ADDRESS")]
-    pub taiko_wrapper_address: Address,
     /// Taiko anchor contract address
     #[clap(long, env = "TAIKO_ANCHOR_ADDRESS")]
     pub anchor_address: Address,
@@ -70,9 +67,6 @@ pub struct InstatusOpts {
     /// Instatus component ID for proof submission timeout monitor
     #[clap(long, env = "INSTATUS_PROOF_SUBMISSION_COMPONENT_ID", default_value = "")]
     pub proof_submission_component_id: String,
-    /// Instatus component ID for proof verification timeout monitor
-    #[clap(long, env = "INSTATUS_PROOF_VERIFICATION_COMPONENT_ID", default_value = "")]
-    pub proof_verification_component_id: String,
     /// Instatus component ID for transaction sequencing monitor
     #[clap(long, env = "INSTATUS_TRANSACTION_SEQUENCING_COMPONENT_ID", default_value = "")]
     pub transaction_sequencing_component_id: String,
@@ -106,7 +100,6 @@ impl InstatusOpts {
             self.page_id.is_empty() ||
             self.batch_submission_component_id.is_empty() ||
             self.proof_submission_component_id.is_empty() ||
-            self.proof_verification_component_id.is_empty() ||
             self.transaction_sequencing_component_id.is_empty() ||
             self.public_api_component_id.is_empty()
         {
@@ -254,8 +247,6 @@ mod tests {
             "0x0000000000000000000000000000000000000001",
             "--preconf-whitelist-address",
             "0x0000000000000000000000000000000000000002",
-            "--taiko-wrapper-address",
-            "0x0000000000000000000000000000000000000003",
             "--anchor-address",
             "0x0000000000000000000000000000000000000004",
             "--api-key",
@@ -266,8 +257,6 @@ mod tests {
             "batch",
             "--proof-submission-component-id",
             "proof",
-            "--proof-verification-component-id",
-            "verify",
             "--transaction-sequencing-component-id",
             "l2",
             "--public-api-component-id",

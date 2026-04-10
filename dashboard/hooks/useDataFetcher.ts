@@ -67,7 +67,6 @@ export const useDataFetcher = ({
         l2Cadence: null,
         batchCadence: null,
         avgProve: null,
-        avgVerify: null,
         activeGateways: null,
         currentOperator: null,
         nextOperator: null,
@@ -122,7 +121,6 @@ export const useDataFetcher = ({
       l2Cadence: data.l2Cadence,
       batchCadence: data.batchCadence,
       avgProve: data.avgProve,
-      avgVerify: data.avgVerify,
       activeGateways,
       currentOperator,
       nextOperator,
@@ -146,7 +144,6 @@ export const useDataFetcher = ({
       metrics,
       chartData: {
         proveTimes: data.proveTimes,
-        verifyTimes: data.verifyTimes,
         l2Times: data.l2Times,
         l2Gas: data.l2Gas,
         txPerBlock: data.txPerBlock,

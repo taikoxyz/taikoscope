@@ -100,13 +100,6 @@ struct AggregatedCostRow {
     total_cost: u128,
 }
 
-#[derive(Serialize, Row)]
-struct VerifiedBatchRow {
-    l1_block_number: u64,
-    batch_id: u64,
-    block_hash: HashBytes,
-}
-
 #[tokio::test]
 async fn l2_head_block_integration() {
     let mock = Mock::new();
@@ -231,41 +224,6 @@ async fn blobs_per_batch_desc_order() {
                 { "l1_block_number": 5, "batch_id": 2, "blob_count": 3 },
                 { "l1_block_number": 4, "batch_id": 1, "blob_count": 1 }
             ]
-        })
-    );
-
-    server.abort();
-}
-
-// removed: block_profits integration test (endpoint removed)
-
-#[tokio::test]
-async fn verify_times_integration() {
-    let mock = Mock::new();
-    mock.add(handlers::provide(vec![clickhouse_lib::BatchVerifyTimeRow {
-        l1_block_number: 2,
-        batch_id: 1,
-        seconds_to_verify: 456,
-    }]));
-
-    let url = Url::parse(mock.url()).unwrap();
-    let client =
-        ClickhouseReader::new(url, "test-db".to_owned(), "user".into(), "pass".into()).unwrap();
-
-    let (addr, server) = spawn_server(client).await;
-    wait_for_server(addr).await;
-
-    let resp = reqwest::get(format!(
-        "http://{addr}/{API_VERSION}/verify-times?created[gte]=0&created[lte]=3600000"
-    ))
-    .await
-    .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-    let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(
-        body,
-        serde_json::json!({
-            "batches": [ { "l1_block_number": 2, "batch_id": 1, "seconds_to_verify": 456 } ]
         })
     );
 

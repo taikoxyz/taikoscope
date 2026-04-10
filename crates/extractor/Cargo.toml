@@ -23,6 +23,7 @@ tokio.workspace = true
 tokio-stream.workspace = true
 tracing.workspace = true
 url.workspace = true
+dashmap.workspace = true
 
 [dev-dependencies]
 tokio.workspace = true

@@ -3,10 +3,7 @@
 use clickhouse::ClickhouseWriter;
 use extractor::Extractor;
 use eyre::Result;
-use messages::{
-    BatchProposedWrapper, BatchesProvedWrapper, BatchesVerifiedWrapper,
-    ForcedInclusionProcessedWrapper,
-};
+use messages::{BatchProposedWrapper, BatchesProvedWrapper, ForcedInclusionProcessedWrapper};
 use tracing::info;
 
 /// State for gap detection operations
@@ -143,54 +140,6 @@ impl<'a> EventHandler<'a> {
                     cost_per_batch = cost_per_batch,
                     "🧪 DRY-RUN: Would insert prove costs for {} batches",
                     proved.batch_ids_proved().len()
-                );
-            }
-        }
-        Ok(())
-    }
-
-    /// Handles batches verified event, inserting verified batch data and calculating verify costs
-    pub async fn handle_batches_verified(&self, wrapper: BatchesVerifiedWrapper) -> Result<()> {
-        let verified = &wrapper.verified;
-        let l1_block_number = wrapper.l1_block_number;
-        let l1_tx_hash = wrapper.l1_tx_hash;
-
-        // Insert verified batch
-        if self.enable_db_writes {
-            crate::event_processing::with_db_error_context(
-                self.writer.insert_verified_batch(verified, l1_block_number),
-                "insert verified batch",
-                format!("batch_id={}", verified.batch_id),
-            )
-            .await?;
-        } else {
-            info!(
-                batch_id = verified.batch_id,
-                l1_block_number = l1_block_number,
-                "🧪 DRY-RUN: Would insert verified batch"
-            );
-        }
-
-        // Calculate and insert verify cost
-        if let Some(cost) =
-            crate::event_processing::fetch_transaction_cost(self.extractor, l1_tx_hash).await
-        {
-            if self.enable_db_writes {
-                crate::event_processing::with_db_error_context(
-                    self.writer.insert_verify_cost(l1_block_number, verified.batch_id, cost),
-                    "insert verify cost",
-                    format!(
-                        "l1_block_number={}, batch_id={}, tx_hash={:?}",
-                        l1_block_number, verified.batch_id, l1_tx_hash
-                    ),
-                )
-                .await?;
-            } else {
-                info!(
-                    l1_block_number = l1_block_number,
-                    batch_id = verified.batch_id,
-                    cost = cost,
-                    "🧪 DRY-RUN: Would insert verify cost"
                 );
             }
         }

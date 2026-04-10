@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use incident::{
     BatchProofTimeoutMonitor, InstatusL1Monitor, InstatusMonitor, Monitor,
-    monitor::{BatchVerifyTimeoutMonitor, spawn_public_rpc_monitor},
+    monitor::spawn_public_rpc_monitor,
 };
 use tracing::{info, warn};
 
@@ -57,16 +57,6 @@ impl crate::driver::Driver {
                 reader.clone(),
                 self.incident_client.clone(),
                 self.instatus_proof_submission_component_id.clone(),
-                Duration::from_secs(self.batch_proof_timeout_secs),
-                Duration::from_secs(60),
-            )
-            .spawn();
-            handles.push(handle);
-
-            let handle = BatchVerifyTimeoutMonitor::new(
-                reader.clone(),
-                self.incident_client.clone(),
-                self.instatus_proof_verification_component_id.clone(),
                 Duration::from_secs(self.batch_proof_timeout_secs),
                 Duration::from_secs(60),
             )

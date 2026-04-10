@@ -441,59 +441,6 @@ export const fetchProveTimesAggregated = async (
   };
 };
 
-export const fetchVerifyTimes = async (
-  range: TimeRange,
-  limit = 50,
-  startingAfter?: number,
-  endingBefore?: number,
-): Promise<RequestResult<TimeSeriesData[]>> => {
-  let url = `${API_BASE}/verify-times?`;
-  if (startingAfter === undefined && endingBefore === undefined) {
-    url += `${timeRangeToQuery(range)}&limit=${limit}`;
-  } else {
-    url += `${rangeToQuery(range)}&limit=${limit}`;
-  }
-  if (startingAfter !== undefined) {
-    url += `&starting_after=${startingAfter}`;
-  } else if (endingBefore !== undefined) {
-    url += `&ending_before=${endingBefore}`;
-  }
-  const res = await fetchJson<{
-    batches: { batch_id: number; seconds_to_verify: number }[];
-  }>(url);
-  return {
-    data: res.data
-      ? res.data.batches.map((b) => ({
-        name: b.batch_id.toString(),
-        value: b.seconds_to_verify,
-        timestamp: 0,
-      }))
-      : null,
-    badRequest: res.badRequest,
-    error: res.error,
-  };
-};
-
-export const fetchVerifyTimesAggregated = async (
-  range: TimeRange,
-): Promise<RequestResult<TimeSeriesData[]>> => {
-  const url = `${API_BASE}/verify-times?${timeRangeToQuery(range)}&aggregated`;
-  const res = await fetchJson<{
-    batches: { batch_id: number; seconds_to_verify: number }[];
-  }>(url);
-  return {
-    data: res.data
-      ? res.data.batches.map((b) => ({
-        name: b.batch_id.toString(),
-        value: b.seconds_to_verify,
-        timestamp: 0,
-      }))
-      : null,
-    badRequest: res.badRequest,
-    error: res.error,
-  };
-};
-
 export const fetchL1BlockTimes = async (
   range: TimeRange,
 ): Promise<RequestResult<TimeSeriesData[]>> => {
@@ -1077,7 +1024,6 @@ export interface DashboardDataResponse {
   l2_block_cadence_ms: number | null;
   batch_posting_cadence_ms: number | null;
   avg_prove_time_ms: number | null;
-  avg_verify_time_ms: number | null;
   avg_tps: number | null;
   preconf_data: PreconfData | null;
   l2_reorgs: number;

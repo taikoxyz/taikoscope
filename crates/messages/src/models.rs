@@ -159,17 +159,6 @@ pub struct ForcedInclusionProcessedRow {
     pub blob_hash: HashBytes,
 }
 
-/// Verified batch row
-#[derive(Debug, Serialize, Deserialize)]
-pub struct VerifiedBatchRow {
-    /// L1 block number
-    pub l1_block_number: u64,
-    /// Batch ID
-    pub batch_id: u64,
-    /// Block hash
-    pub block_hash: HashBytes,
-}
-
 /// Slashing event row
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SlashingEventRow {
@@ -224,16 +213,6 @@ pub struct BatchProveTimeRow {
     /// Seconds between proposal and proof
     pub seconds_to_prove: u64,
 }
-
-/// Row representing the time it took for a batch to be verified
-#[derive(Debug, Serialize, Deserialize)]
-pub struct BatchVerifyTimeRow {
-    /// Batch ID
-    pub batch_id: u64,
-    /// Seconds between proof and verification
-    pub seconds_to_verify: u64,
-}
-
 /// Row representing the block number seen at a given minute
 #[derive(Debug, Serialize, Deserialize)]
 pub struct L1BlockTimeRow {
@@ -307,28 +286,6 @@ pub struct ProveCostInsertRow {
     pub cost: u128,
 }
 
-/// Row representing the verifier cost for a batch
-#[derive(Debug, Serialize, Deserialize)]
-pub struct VerifyCostRow {
-    /// L1 block number
-    pub l1_block_number: u64,
-    /// Batch ID
-    pub batch_id: u64,
-    /// Cost in gwei for verifying the batch
-    pub cost: u128,
-}
-
-/// Row used for inserting verifier cost
-#[derive(Debug, Serialize, Deserialize)]
-pub struct VerifyCostInsertRow {
-    /// L1 block number
-    pub l1_block_number: u64,
-    /// Batch ID
-    pub batch_id: u64,
-    /// Cost in gwei for verifying the batch
-    pub cost: u128,
-}
-
 /// Row representing the fee components for an L2 block
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BlockFeeComponentRow {
@@ -370,8 +327,6 @@ pub struct BatchFeeComponentRow {
     pub l1_data_cost: Option<u128>,
     /// Prover cost associated with the batch, if available
     pub prove_cost: Option<u128>,
-    /// Verifier cost amortized across batches in the selected range
-    pub amortized_verify_cost: Option<u128>,
 }
 
 /// Row representing the transactions per second for an L2 block

@@ -11,7 +11,6 @@ describe('metricsCreator', () => {
       l2Cadence: 60000,
       batchCadence: 30000,
       avgProve: 2000,
-      avgVerify: 3000,
       activeGateways: 2,
       currentOperator: addressA,
       nextOperator: addressB,
@@ -29,13 +28,11 @@ describe('metricsCreator', () => {
       l1Block: 50,
     });
 
-    expect(metrics).toHaveLength(19);
+    expect(metrics).toHaveLength(18);
     expect(metrics[0].value).toBe('1.2');
 
     const proveMetric = metrics.find((m) => m.title === 'Avg. Prove Time');
-    const verifyMetric = metrics.find((m) => m.title === 'Avg. Verify Time');
     expect(proveMetric?.value).toBe('2s');
-    expect(verifyMetric?.value).toBe('3s');
 
     const proveCostMetric = metrics.find((m) => m.title === 'Prove Cost');
     expect(proveCostMetric?.value).toBe('5 ETH');
@@ -63,7 +60,6 @@ describe('metricsCreator', () => {
       l2Cadence: null,
       batchCadence: null,
       avgProve: null,
-      avgVerify: null,
       activeGateways: null,
       currentOperator: null,
       nextOperator: null,

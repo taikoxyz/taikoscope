@@ -175,17 +175,6 @@ pub struct OrphanedL2HashRow {
     pub l2_block_number: u64,
 }
 
-/// Verified batch row
-#[derive(Debug, Row, Serialize, Deserialize, PartialEq, Eq)]
-pub struct VerifiedBatchRow {
-    /// L1 block number
-    pub l1_block_number: u64,
-    /// Batch ID
-    pub batch_id: u64,
-    /// Block hash
-    pub block_hash: HashBytes,
-}
-
 /// Slashing event row
 #[derive(Debug, Row, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
 pub struct SlashingEventRow {
@@ -267,15 +256,6 @@ pub struct BatchProveTimeRow {
     pub seconds_to_prove: u64,
 }
 
-/// Row representing the time it took for a batch to be verified
-#[derive(Debug, Row, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
-pub struct BatchVerifyTimeRow {
-    /// Batch ID
-    pub batch_id: u64,
-    /// Seconds between proof and verification
-    pub seconds_to_verify: u64,
-}
-
 /// Row representing the block number seen at a given minute
 #[derive(Debug, Row, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
 pub struct L1BlockTimeRow {
@@ -346,28 +326,6 @@ pub struct ProveCostInsertRow {
     /// Batch ID
     pub batch_id: u64,
     /// Cost in gwei for proving the batch
-    pub cost: u128,
-}
-
-/// Row representing the verifier cost for a batch
-#[derive(Debug, Row, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
-pub struct VerifyCostRow {
-    /// L1 block number
-    pub l1_block_number: u64,
-    /// Batch ID
-    pub batch_id: u64,
-    /// Cost in gwei for verifying the batch
-    pub cost: u128,
-}
-
-/// Row used for inserting verifier cost
-#[derive(Debug, Row, Serialize, Deserialize, PartialEq, Eq)]
-pub struct VerifyCostInsertRow {
-    /// L1 block number
-    pub l1_block_number: u64,
-    /// Batch ID
-    pub batch_id: u64,
-    /// Cost in gwei for verifying the batch
     pub cost: u128,
 }
 

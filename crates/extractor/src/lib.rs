@@ -3,22 +3,21 @@
 #![allow(clippy::cognitive_complexity)]
 use chainio::{
     self, DefaultProvider,
-    ITaikoInbox::{BatchProposed, BatchesProved, BatchesVerified as InboxBatchesVerified},
-    taiko::{
-        preconf_whitelist::TaikoPreconfWhitelist,
-        wrapper::{ITaikoWrapper::ForcedInclusionProcessed, TaikoWrapper},
-    },
+    IInbox::{Proposed as InboxBatchProposed, Proved as InboxBatchesProved},
+    taiko::preconf_whitelist::TaikoPreconfWhitelist,
 };
 
-use std::pin::Pin;
+use std::{borrow::Cow, pin::Pin, sync::Arc, time::Duration};
 
 use alloy::{
-    primitives::{Address, B256, BlockNumber},
+    primitives::{Address, B256, BlockNumber, U256},
     providers::{Provider, ProviderBuilder},
+    sol_types::{SolCall, SolValue},
 };
-use alloy_consensus::BlockHeader;
+use alloy_consensus::{BlockHeader, Transaction};
 use alloy_rpc_client::ClientBuilder;
 use chainio::TaikoInbox;
+use dashmap::DashMap;
 use derive_more::Debug;
 use eyre::{Context, Result};
 use network::retries::{DEFAULT_RETRY_LAYER, RetryWsConnect};
@@ -26,11 +25,12 @@ use primitives::{
     block_stats::compute_block_stats,
     headers::{L1Header, L1HeaderStream, L2Header, L2HeaderStream},
 };
-use std::time::Duration;
 use tokio::{sync::mpsc, time::sleep};
 use tokio_stream::{Stream, StreamExt, wrappers::UnboundedReceiverStream};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use url::Url;
+
+const L1_BLOCK_CACHE_DEPTH: u64 = 10_000;
 
 /// Extractor client
 #[derive(Debug, Clone)]
@@ -41,25 +41,30 @@ pub struct Extractor {
     l2_provider: DefaultProvider,
     preconf_whitelist: TaikoPreconfWhitelist,
     taiko_inbox: TaikoInbox,
-    taiko_wrapper: TaikoWrapper,
     anchor_address: Address,
+    l1_block_cache: Arc<DashMap<u64, u64>>,
 }
 
 /// Stream of batch proposed events with their L1 transaction hash
 pub type BatchProposedStream =
-    Pin<Box<dyn Stream<Item = (BatchProposed, alloy::primitives::B256)> + Send>>;
+    Pin<Box<dyn Stream<Item = (chainio::BatchProposed, alloy::primitives::B256)> + Send>>;
 /// Stream of batches proved events
-pub type BatchesProvedStream = Pin<
-    Box<
-        dyn Stream<Item = (chainio::ITaikoInbox::BatchesProved, u64, alloy::primitives::B256)>
-            + Send,
-    >,
->;
-/// Stream of batches verified events
-pub type BatchesVerifiedStream =
-    Pin<Box<dyn Stream<Item = (chainio::BatchesVerified, u64, alloy::primitives::B256)> + Send>>;
+pub type BatchesProvedStream =
+    Pin<Box<dyn Stream<Item = (chainio::BatchesProved, u64, alloy::primitives::B256)> + Send>>;
 /// Stream of forced inclusion processed events
-pub type ForcedInclusionStream = Pin<Box<dyn Stream<Item = ForcedInclusionProcessed> + Send>>;
+pub type ForcedInclusionStream =
+    Pin<Box<dyn Stream<Item = chainio::ForcedInclusionProcessed> + Send>>;
+
+/// Decoded Shasta `Proposed` log with all Taikoscope events derived from the payload.
+#[derive(Debug)]
+pub struct DecodedBatchProposed {
+    /// Proposal translated into the legacy batch-shaped model.
+    pub batch: chainio::BatchProposed,
+    /// L1 transaction hash that emitted the proposal log.
+    pub tx_hash: B256,
+    /// Forced inclusions derived from the proposal sources.
+    pub forced_inclusions: Vec<chainio::ForcedInclusionProcessed>,
+}
 
 impl Extractor {
     /// Create a new extractor
@@ -68,7 +73,6 @@ impl Extractor {
         l2_rpc_url: Url,
         inbox_address: Address,
         preconf_whitelist_address: Address,
-        taiko_wrapper_address: Address,
         anchor_address: Address,
     ) -> Result<Self> {
         // Validate URL schemes
@@ -107,15 +111,16 @@ impl Extractor {
         let taiko_inbox = TaikoInbox::new_readonly(inbox_address, l1_provider.clone());
         let preconf_whitelist =
             TaikoPreconfWhitelist::new_readonly(preconf_whitelist_address, l1_provider.clone());
-        let taiko_wrapper = TaikoWrapper::new_readonly(taiko_wrapper_address, l1_provider.clone());
+
+        let l1_block_cache = Arc::new(DashMap::<u64, u64>::new());
 
         Ok(Self {
             l1_provider,
             l2_provider,
             preconf_whitelist,
             taiko_inbox,
-            taiko_wrapper,
             anchor_address,
+            l1_block_cache,
         })
     }
 
@@ -124,6 +129,7 @@ impl Extractor {
     pub async fn get_l1_header_stream(&self) -> Result<L1HeaderStream> {
         let (tx, rx) = mpsc::unbounded_channel();
         let provider = self.l1_provider.clone();
+        let l1_block_cache = Arc::clone(&self.l1_block_cache);
 
         tokio::spawn(async move {
             loop {
@@ -167,6 +173,7 @@ impl Extractor {
                         slot,
                         timestamp: block_data.timestamp,
                     };
+                    insert_l1_block_timestamp(&l1_block_cache, header.number, header.timestamp);
                     if tx.send(header).is_err() {
                         error!("L1 header receiver dropped. Stopping L1 header task.");
                         return; // Exit task if receiver is gone
@@ -231,51 +238,48 @@ impl Extractor {
     pub async fn get_batch_proposed_stream(&self) -> Result<BatchProposedStream> {
         let (tx, rx) = mpsc::unbounded_channel();
         let provider = self.l1_provider.clone();
-        let taiko_inbox = self.taiko_inbox.clone(); // Clone for use in the spawned task
+        let extractor = self.clone();
+        let taiko_inbox = self.taiko_inbox.clone();
 
         tokio::spawn(async move {
             loop {
-                info!("Attempting to subscribe to TaikoInbox BatchProposed events...");
+                info!("Attempting to subscribe to TaikoInbox Proposed events...");
                 let filter = taiko_inbox.batch_proposed_filter();
                 let sub_result = provider.subscribe_logs(&filter).await;
 
                 let mut log_stream = match sub_result {
                     Ok(sub) => {
-                        info!("Successfully subscribed to TaikoInbox BatchProposed events.");
+                        info!("Successfully subscribed to TaikoInbox Proposed events.");
                         sub.into_stream()
                     }
                     Err(e) => {
-                        error!(error = %e, "Failed to subscribe to BatchProposed logs, retrying in 5s");
+                        error!(error = %e, "Failed to subscribe to Proposed logs, retrying in 5s");
                         sleep(Duration::from_secs(5)).await;
                         continue;
                     }
                 };
 
                 while let Some(log) = log_stream.next().await {
-                    // Skip reverted logs from reorgs
                     if log.removed {
-                        info!("Skipping removed BatchProposed log due to L1 reorg");
+                        info!("Skipping removed Proposed log due to L1 reorg");
                         continue;
                     }
-                    match log.log_decode::<BatchProposed>() {
-                        Ok(decoded) => {
-                            // Include the transaction hash from the log
-                            let tx_hash = log.transaction_hash.unwrap_or_default();
-                            if tx.send((decoded.data().clone(), tx_hash)).is_err() {
+                    match extractor.decode_batch_proposed_log(&log).await {
+                        Ok(Some(decoded)) => {
+                            if tx.send((decoded.batch, decoded.tx_hash)).is_err() {
                                 error!(
-                                    "BatchProposed receiver dropped. Stopping BatchProposed event task."
+                                    "BatchProposed receiver dropped. Stopping Proposed event task."
                                 );
-                                return; // Exit task if receiver is gone
+                                return;
                             }
                         }
+                        Ok(None) => {}
                         Err(err) => {
-                            warn!(error = %err, "Failed to decode BatchProposed log");
-                            // Optionally, decide if this is a critical error or can be skipped.
-                            // For now, we just log and continue.
+                            warn!(error = %err, "Failed to decode Proposed log");
                         }
                     }
                 }
-                warn!("BatchProposed log stream ended. Attempting to resubscribe...");
+                warn!("Proposed log stream ended. Attempting to resubscribe...");
             }
         });
 
@@ -288,108 +292,105 @@ impl Extractor {
     pub async fn get_batches_proved_stream(&self) -> Result<BatchesProvedStream> {
         let (tx, rx) = mpsc::unbounded_channel();
         let provider = self.l1_provider.clone();
-        let taiko_inbox = self.taiko_inbox.clone(); // Clone for use in the spawned task
+        let extractor = self.clone();
+        let taiko_inbox = self.taiko_inbox.clone();
 
         tokio::spawn(async move {
             loop {
-                info!("Attempting to subscribe to TaikoInbox BatchesProved events...");
+                info!("Attempting to subscribe to TaikoInbox Proved events...");
                 let filter = taiko_inbox.batches_proved_filter();
                 let sub_result = provider.subscribe_logs(&filter).await;
 
                 let mut log_stream = match sub_result {
                     Ok(sub) => {
-                        info!("Successfully subscribed to TaikoInbox BatchesProved events.");
+                        info!("Successfully subscribed to TaikoInbox Proved events.");
                         sub.into_stream()
                     }
                     Err(e) => {
-                        error!(error = %e, "Failed to subscribe to BatchesProved logs, retrying in 5s");
+                        error!(error = %e, "Failed to subscribe to Proved logs, retrying in 5s");
                         sleep(Duration::from_secs(5)).await;
                         continue;
                     }
                 };
 
                 while let Some(log) = log_stream.next().await {
-                    // Skip reverted logs from reorgs
                     if log.removed {
-                        info!("Skipping removed BatchesProved log due to L1 reorg");
+                        info!("Skipping removed Proved log due to L1 reorg");
                         continue;
                     }
-                    match log.log_decode::<BatchesProved>() {
-                        Ok(decoded) => {
-                            let l1_block_number = log.block_number.unwrap_or(0);
-                            let tx_hash = log.transaction_hash.unwrap_or_default();
-                            if tx.send((decoded.data().clone(), l1_block_number, tx_hash)).is_err()
-                            {
+                    match extractor.decode_batches_proved_log(&log).await {
+                        Ok(Some((proved, l1_block_number, tx_hash))) => {
+                            if tx.send((proved, l1_block_number, tx_hash)).is_err() {
                                 error!(
-                                    "BatchesProved receiver dropped. Stopping BatchesProved event task."
+                                    "BatchesProved receiver dropped. Stopping Proved event task."
                                 );
-                                return; // Exit task if receiver is gone
+                                return;
                             }
                         }
+                        Ok(None) => {}
                         Err(err) => {
-                            warn!(error = %err, "Failed to decode BatchesProved log");
-                            // Optionally, decide if this is a critical error or can be skipped.
-                            // For now, we just log and continue.
+                            warn!(error = %err, "Failed to decode Proved log");
                         }
                     }
                 }
-                warn!("BatchesProved log stream ended. Attempting to resubscribe...");
+                warn!("Proved log stream ended. Attempting to resubscribe...");
             }
         });
 
         Ok(Box::pin(UnboundedReceiverStream::new(rx)))
     }
 
-    /// Subscribes to the `TaikoWrapper` `ForcedInclusionProcessed` event and returns a stream of
+    /// Subscribes to the `ForcedInclusionProcessed` event and returns a stream of
     /// decoded events. This stream will attempt to automatically resubscribe and continue
     /// yielding events.
     pub async fn get_forced_inclusion_stream(&self) -> Result<ForcedInclusionStream> {
         let (tx, rx) = mpsc::unbounded_channel();
         let provider = self.l1_provider.clone();
-        let taiko_wrapper = self.taiko_wrapper.clone(); // Clone for use in the spawned task
+        let taiko_inbox = self.taiko_inbox.clone();
 
         tokio::spawn(async move {
             loop {
-                info!("Attempting to subscribe to TaikoWrapper ForcedInclusionProcessed events...");
-                let filter = taiko_wrapper.forced_inclusion_processed_filter();
+                info!(
+                    "Attempting to subscribe to TaikoInbox Proposed events for forced inclusions..."
+                );
+                let filter = taiko_inbox.batch_proposed_filter();
                 let sub_result = provider.subscribe_logs(&filter).await;
 
                 let mut log_stream = match sub_result {
                     Ok(sub) => {
-                        info!(
-                            "Successfully subscribed to TaikoWrapper ForcedInclusionProcessed events."
-                        );
+                        info!("Successfully subscribed to TaikoInbox Proposed events.");
                         sub.into_stream()
                     }
                     Err(e) => {
-                        error!(error = %e, "Failed to subscribe to ForcedInclusionProcessed logs, retrying in 5s");
+                        error!(error = %e, "Failed to subscribe to Proposed logs for forced inclusions, retrying in 5s");
                         sleep(Duration::from_secs(5)).await;
                         continue;
                     }
                 };
 
                 while let Some(log) = log_stream.next().await {
-                    // Skip reverted logs from reorgs
                     if log.removed {
-                        info!("Skipping removed ForcedInclusionProcessed log due to L1 reorg");
+                        info!("Skipping removed Proposed log due to L1 reorg");
                         continue;
                     }
-                    match log.log_decode::<ForcedInclusionProcessed>() {
+                    match log.log_decode::<InboxBatchProposed>() {
                         Ok(decoded) => {
-                            if tx.send(decoded.data().clone()).is_err() {
-                                error!(
-                                    "ForcedInclusionProcessed receiver dropped. Stopping ForcedInclusionProcessed event task."
-                                );
-                                return; // Exit task if receiver is gone
+                            let events = forced_inclusions_from_proposed(decoded.data());
+                            for event in events {
+                                if tx.send(event).is_err() {
+                                    error!(
+                                        "ForcedInclusionProcessed receiver dropped. Stopping forced inclusion task."
+                                    );
+                                    return;
+                                }
                             }
                         }
                         Err(err) => {
-                            warn!(error = %err, "Failed to decode ForcedInclusionProcessed log");
-                            // Optionally, decide if this is a critical error or can be skipped.
+                            warn!(error = %err, "Failed to decode Proposed log for forced inclusions");
                         }
                     }
                 }
-                warn!("ForcedInclusionProcessed log stream ended. Attempting to resubscribe...");
+                warn!("Forced inclusion Proposed log stream ended. Attempting to resubscribe...");
             }
         });
 
@@ -408,60 +409,115 @@ impl Extractor {
         Ok(operator)
     }
 
-    /// Subscribes to the `TaikoInbox` `BatchesVerified` event and returns a stream of decoded
-    /// events along with the block number. This stream will attempt to automatically
-    /// resubscribe and continue yielding events.
-    pub async fn get_batches_verified_stream(&self) -> Result<BatchesVerifiedStream> {
-        let (tx, rx) = mpsc::unbounded_channel();
-        let provider = self.l1_provider.clone();
-        let taiko_inbox = self.taiko_inbox.clone(); // Clone for use in the spawned task
+    /// Decode a Shasta `Proposed` log into Taikoscope's internal batch model.
+    pub async fn decode_batch_proposed_log(
+        &self,
+        log: &alloy_rpc_types_eth::Log,
+    ) -> Result<Option<DecodedBatchProposed>> {
+        let decoded = match log.log_decode::<InboxBatchProposed>() {
+            Ok(decoded) => decoded,
+            Err(_) => return Ok(None),
+        };
 
-        tokio::spawn(async move {
-            loop {
-                info!("Attempting to subscribe to TaikoInbox BatchesVerified events...");
-                let filter = taiko_inbox.batches_verified_filter();
-                let sub_result = provider.subscribe_logs(&filter).await;
+        let proposed = decoded.data();
+        let tx_hash = log.transaction_hash.unwrap_or_default();
+        let l1_block_number = log
+            .block_number
+            .ok_or_else(|| eyre::eyre!("missing L1 block number for Proposed log"))?;
+        let forced_inclusions = forced_inclusions_from_proposed(proposed);
+        let batch = self.build_batch_from_proposed(proposed, l1_block_number).await?;
 
-                let mut log_stream = match sub_result {
-                    Ok(sub) => {
-                        info!("Successfully subscribed to TaikoInbox BatchesVerified events.");
-                        sub.into_stream()
-                    }
-                    Err(e) => {
-                        error!(error = %e, "Failed to subscribe to BatchesVerified logs, retrying in 5s");
-                        sleep(Duration::from_secs(5)).await;
-                        continue;
-                    }
-                };
+        Ok(Some(DecodedBatchProposed { batch, tx_hash, forced_inclusions }))
+    }
 
-                while let Some(log) = log_stream.next().await {
-                    // Skip reverted logs from reorgs
-                    if log.removed {
-                        info!("Skipping removed BatchesVerified log due to L1 reorg");
-                        continue;
-                    }
-                    match decode_batches_verified(&log) {
-                        Ok(verified) => {
-                            let l1_block_number = log.block_number.unwrap_or(0);
-                            let tx_hash = log.transaction_hash.unwrap_or_default();
-                            if tx.send((verified, l1_block_number, tx_hash)).is_err() {
-                                error!(
-                                    "BatchesVerified receiver dropped. Stopping BatchesVerified event task."
-                                );
-                                return; // Exit task if receiver is gone
-                            }
-                        }
-                        Err(err) => {
-                            warn!(error = %err, "Failed to decode BatchesVerified log");
-                            // Optionally, decide if this is a critical error or can be skipped.
-                        }
-                    }
-                }
-                warn!("BatchesVerified log stream ended. Attempting to resubscribe...");
+    /// Decode a Shasta `Proved` log plus prove calldata into Taikoscope's internal proved model.
+    pub async fn decode_batches_proved_log(
+        &self,
+        log: &alloy_rpc_types_eth::Log,
+    ) -> Result<Option<(chainio::BatchesProved, u64, B256)>> {
+        let decoded = match log.log_decode::<InboxBatchesProved>() {
+            Ok(decoded) => decoded,
+            Err(_) => return Ok(None),
+        };
+
+        let tx_hash = log.transaction_hash.unwrap_or_default();
+        let tx = self
+            .l1_provider
+            .get_transaction_by_hash(tx_hash)
+            .await?
+            .ok_or_else(|| eyre::eyre!("missing proving transaction for {}", tx_hash))?;
+        let proved = decode_batches_proved(decoded.data(), tx.input())?;
+
+        Ok(Some((proved, log.block_number.unwrap_or_default(), tx_hash)))
+    }
+
+    async fn build_batch_from_proposed(
+        &self,
+        proposed: &InboxBatchProposed,
+        l1_block_number: u64,
+    ) -> Result<chainio::BatchProposed> {
+        let batch_id = proposed.id.to::<u64>();
+        let last_l2_block_number = self.get_last_block_id_by_batch_id_with_retry(batch_id).await?;
+        let batch_size = if batch_id == 0 {
+            last_l2_block_number.saturating_add(1)
+        } else {
+            let previous_last =
+                self.get_last_block_id_by_batch_id_with_retry(batch_id.saturating_sub(1)).await?;
+            last_l2_block_number.saturating_sub(previous_last)
+        };
+        let batch_size = u16::try_from(batch_size)
+            .wrap_err_with(|| format!("proposal {} exceeds supported batch size", batch_id))?;
+        let blob_hashes = flatten_blob_hashes(&proposed.sources);
+        let blob_byte_size = approximate_blob_bytes(blob_hashes.len());
+        let last_block_timestamp = self.get_l1_timestamp_cached(l1_block_number).await?;
+
+        Ok(chainio::BatchProposed {
+            info: chainio::BatchInfo {
+                blocks: vec![chainio::BlockParams; usize::from(batch_size)],
+                blobHashes: blob_hashes,
+                proposedIn: l1_block_number,
+                blobByteSize: blob_byte_size,
+                lastBlockId: last_l2_block_number,
+                lastBlockTimestamp: last_block_timestamp,
+            },
+            meta: chainio::BatchMetadata { proposer: proposed.proposer, batchId: batch_id },
+        })
+    }
+
+    async fn get_last_block_id_by_batch_id_with_retry(&self, batch_id: u64) -> Result<u64> {
+        const MAX_RETRIES: u32 = 20;
+        const DELAY_MS: u64 = 500;
+
+        for attempt in 0..MAX_RETRIES {
+            debug!("Last block id by batch id not found, retrying: attempt #{attempt}");
+            match self.get_last_block_id_by_batch_id(batch_id).await? {
+                Some(block_id) => return Ok(block_id),
+                None if attempt < MAX_RETRIES - 1 => sleep(Duration::from_millis(DELAY_MS)).await,
+                None => break,
             }
-        });
+        }
 
-        Ok(Box::pin(UnboundedReceiverStream::new(rx)))
+        Err(eyre::eyre!("missing taikoAuth_lastBlockIDByBatchID mapping for proposal {}", batch_id))
+    }
+
+    /// Fetch the last L2 block ID associated with a proposal via Taiko's authenticated RPC.
+    pub async fn get_last_block_id_by_batch_id(&self, batch_id: u64) -> Result<Option<u64>> {
+        let result: Option<U256> = self
+            .l2_provider
+            .raw_request(Cow::Borrowed("taikoAuth_lastBlockIDByBatchID"), (U256::from(batch_id),))
+            .await?;
+        Ok(result.map(|value| value.to::<u64>()))
+    }
+
+    async fn get_l1_timestamp_cached(&self, block_number: u64) -> Result<u64> {
+        if let Some(timestamp) = self.l1_block_cache.get(&block_number) {
+            return Ok(*timestamp);
+        }
+
+        let block = self.get_l1_block_by_number(block_number).await?;
+        let timestamp = block.header.timestamp;
+        insert_l1_block_timestamp(&self.l1_block_cache, block_number, timestamp);
+        Ok(timestamp)
     }
 
     /// Get the operator candidates for the current epoch
@@ -536,7 +592,7 @@ impl Extractor {
                         let delay_ms = BASE_DELAY_MS * (1u64 << attempt).min(8) // Cap at 8x base delay
                             + ((attempt as u64) * 50).min(100); // Add simple jitter
 
-                        tracing::debug!(
+                        debug!(
                             attempt = attempt + 1,
                             max_retries = MAX_RETRIES,
                             delay_ms,
@@ -559,12 +615,73 @@ impl Extractor {
     }
 }
 
-fn decode_batches_verified(log: &alloy_rpc_types_eth::Log) -> Result<chainio::BatchesVerified> {
-    let decoded = log.log_decode::<InboxBatchesVerified>()?;
-    let data = decoded.data();
-    let mut block_hash = [0u8; 32];
-    block_hash.copy_from_slice(data.blockHash.as_slice());
-    Ok(chainio::BatchesVerified { batch_id: data.batchId, block_hash })
+fn flatten_blob_hashes(sources: &[chainio::IInbox::DerivationSource]) -> Vec<B256> {
+    sources.iter().flat_map(|source| source.blobSlice.blobHashes.iter().copied()).collect()
+}
+
+fn approximate_blob_bytes(blob_count: usize) -> u32 {
+    const BLOB_BYTES: u64 = 4096 * 32;
+    let blob_bytes = (blob_count as u64).saturating_mul(BLOB_BYTES);
+    blob_bytes.min(u64::from(u32::MAX)) as u32
+}
+
+fn insert_l1_block_timestamp(cache: &DashMap<u64, u64>, block_number: u64, timestamp: u64) {
+    cache.insert(block_number, timestamp);
+    let oldest_kept = block_number.saturating_sub(L1_BLOCK_CACHE_DEPTH);
+    cache.retain(|number, _| *number >= oldest_kept);
+}
+
+fn forced_inclusions_from_proposed(
+    proposed: &InboxBatchProposed,
+) -> Vec<chainio::ForcedInclusionProcessed> {
+    proposed
+        .sources
+        .iter()
+        .filter(|source| source.isForcedInclusion)
+        .flat_map(|source| source.blobSlice.blobHashes.iter().copied())
+        .map(|blob_hash| chainio::ForcedInclusionProcessed {
+            forcedInclusion: chainio::ForcedInclusion { blobHash: blob_hash },
+        })
+        .collect()
+}
+
+fn decode_batches_proved(
+    proved: &InboxBatchesProved,
+    calldata: &[u8],
+) -> Result<chainio::BatchesProved> {
+    let call = chainio::IInbox::proveCall::abi_decode(calldata)
+        .map_err(|err| eyre::eyre!("decode prove calldata failed: {}", err))?;
+    let input = chainio::IInbox::ProveInput::abi_decode(&call._data)
+        .map_err(|err| eyre::eyre!("decode prove input failed: {}", err))?;
+    let commitment = input.commitment;
+    let first_proposal_id = proved.firstProposalId.to::<u64>();
+    let first_new_proposal_id = proved.firstNewProposalId.to::<u64>();
+    let last_proposal_id = proved.lastProposalId.to::<u64>();
+    let first_new_index = first_new_proposal_id.saturating_sub(first_proposal_id) as usize;
+    let batch_ids: Vec<u64> = (first_new_proposal_id..=last_proposal_id).collect();
+    let total = batch_ids.len();
+
+    let transitions = batch_ids
+        .iter()
+        .enumerate()
+        .map(|(i, _)| {
+            let transition = commitment.transitions.get(first_new_index + i);
+            let parent_hash = if i == 0 && first_new_index == 0 {
+                commitment.firstProposalParentBlockHash
+            } else {
+                B256::ZERO
+            };
+            let state_root = if i + 1 == total { commitment.endStateRoot } else { B256::ZERO };
+
+            chainio::Transition {
+                parentHash: parent_hash,
+                blockHash: transition.map(|transition| transition.blockHash).unwrap_or(B256::ZERO),
+                stateRoot: state_root,
+            }
+        })
+        .collect();
+
+    Ok(chainio::BatchesProved { verifier: proved.actualProver, batchIds: batch_ids, transitions })
 }
 
 /// Detects reorgs based on block numbers and hashes.
@@ -642,9 +759,7 @@ impl ReorgDetector {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloy::primitives::{Address, B256, Log as PrimitiveLog};
-    use alloy_rpc_types_eth::Log;
-    use alloy_sol_types::SolEvent;
+    use alloy::primitives::B256;
 
     #[test]
     fn initial_block() {
@@ -809,15 +924,13 @@ mod tests {
     }
 
     #[test]
-    fn decode_verified_event() {
-        let event = InboxBatchesVerified { batchId: 7, blockHash: B256::repeat_byte(2) };
-        let primitive = PrimitiveLog { address: Address::ZERO, data: event };
-        let encoded = InboxBatchesVerified::encode_log(&primitive);
-        let log = Log { inner: encoded, ..Default::default() };
+    fn l1_block_timestamp_cache_eviction_keeps_recent_blocks() {
+        let cache = DashMap::new();
+        insert_l1_block_timestamp(&cache, 1, 10);
+        insert_l1_block_timestamp(&cache, L1_BLOCK_CACHE_DEPTH + 2, 20);
 
-        let decoded = decode_batches_verified(&log).unwrap();
-        assert_eq!(decoded.batch_id, 7);
-        assert_eq!(decoded.block_hash, [2u8; 32]);
+        assert!(!cache.contains_key(&1));
+        assert_eq!(cache.get(&(L1_BLOCK_CACHE_DEPTH + 2)).map(|ts| *ts), Some(20));
     }
 
     #[tokio::test]

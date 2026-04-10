@@ -14,7 +14,6 @@ export interface MetricInputData {
   l2Cadence: number | null;
   batchCadence: number | null;
   avgProve: number | null;
-  avgVerify: number | null;
   activeGateways: number | null;
   currentOperator: string | null;
   nextOperator: string | null;
@@ -57,14 +56,6 @@ export const createMetrics = (data: MetricInputData): MetricData[] => [
     value:
       data.avgProve != null && data.avgProve > 0
         ? formatSeconds(data.avgProve / 1000)
-        : 'N/A',
-    group: 'Network Health',
-  },
-  {
-    title: 'Avg. Verify Time',
-    value:
-      data.avgVerify != null && data.avgVerify > 0
-        ? formatSeconds(data.avgVerify / 1000)
         : 'N/A',
     group: 'Network Health',
   },

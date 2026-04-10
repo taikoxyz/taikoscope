@@ -1860,6 +1860,7 @@ dependencies = [
  "alloy-rpc-types-eth",
  "alloy-sol-types",
  "chainio",
+ "dashmap",
  "derive_more 1.0.0",
  "eyre",
  "network",

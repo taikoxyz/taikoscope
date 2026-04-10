@@ -86,13 +86,11 @@ pub struct ResolveIncident {
 }
 
 mod batch_proof_timeout;
-mod batch_verify_timeout;
 mod instatus;
 mod instatus_l1;
 mod public_rpc;
 
 pub use batch_proof_timeout::BatchProofTimeoutMonitor;
-pub use batch_verify_timeout::BatchVerifyTimeoutMonitor;
 pub use instatus::InstatusMonitor;
 pub use instatus_l1::InstatusL1Monitor;
 pub use public_rpc::spawn_public_rpc_monitor;

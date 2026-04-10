@@ -32,7 +32,6 @@ type TimeRange = string;
 type State = {
   metrics: MetricData[];
   secondsToProveData: unknown[];
-  secondsToVerifyData: unknown[];
   l2BlockTimeData: unknown[];
   l2GasUsedData: unknown[];
   sequencerDistribution: unknown[];
@@ -243,7 +242,6 @@ async function fetchData(range: TimeRange, state: State, economics = false) {
       l2Cadence: null,
       batchCadence: null,
       avgProve: null,
-      avgVerify: null,
       activeGateways: null,
       currentOperator: null,
       nextOperator: null,
@@ -351,7 +349,6 @@ async function fetchData(range: TimeRange, state: State, economics = false) {
     l2Cadence,
     batchCadence,
     avgProve,
-    avgVerify: null,
     activeGateways,
     currentOperator,
     nextOperator,
@@ -367,7 +364,6 @@ async function fetchData(range: TimeRange, state: State, economics = false) {
 
   state.metrics = currentMetrics;
   state.secondsToProveData = proveTimes;
-  state.secondsToVerifyData = [];
   state.l2BlockTimeData = l2Times;
   state.l2GasUsedData = l2Gas;
   state.sequencerDistribution = sequencerDist;
@@ -416,7 +412,6 @@ it('app integration', async () => {
   const state: State = {
     metrics: [],
     secondsToProveData: [],
-    secondsToVerifyData: [],
     l2BlockTimeData: [],
     l2GasUsedData: [],
     sequencerDistribution: [],

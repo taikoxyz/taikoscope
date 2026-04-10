@@ -18,7 +18,7 @@ use crate::{
     models::{
         BatchBlockRow, BatchRow, ForcedInclusionProcessedRow, L1DataCostInsertRow, L1HeadEvent,
         L2HeadEvent, L2ReorgInsertRow, OrphanedL2HashRow, PreconfData, ProveCostInsertRow,
-        ProvedBatchRow, SchemaVersionInsert, VerifiedBatchRow, VerifyCostInsertRow,
+        ProvedBatchRow, SchemaVersionInsert,
     },
     schema::{TABLE_SCHEMAS, TABLES, TableSchema, VIEWS},
     types::{AddressBytes, HashBytes},
@@ -476,21 +476,6 @@ impl ClickhouseWriter {
         Ok(())
     }
 
-    /// Insert verifier cost for a batch
-    pub async fn insert_verify_cost(
-        &self,
-        l1_block_number: u64,
-        batch_id: u64,
-        cost: u128,
-    ) -> Result<()> {
-        let client = self.base.clone();
-        let row = VerifyCostInsertRow { l1_block_number, batch_id, cost };
-        let mut insert = client.insert(&format!("{}.verify_costs", self.db_name))?;
-        insert.write(&row).await?;
-        insert.end().await?;
-        Ok(())
-    }
-
     /// Insert batch block mappings for a batch
     pub async fn insert_batch_blocks(
         &self,
@@ -516,7 +501,7 @@ impl ClickhouseWriter {
     /// Insert a batch and its block mappings
     pub async fn insert_batch(
         &self,
-        batch: &chainio::ITaikoInbox::BatchProposed,
+        batch: &chainio::BatchProposed,
         l1_tx_hash: B256,
     ) -> Result<()> {
         let client = self.base.clone();
@@ -537,7 +522,7 @@ impl ClickhouseWriter {
     /// Insert proved batches
     pub async fn insert_proved_batch(
         &self,
-        proved: &chainio::ITaikoInbox::BatchesProved,
+        proved: &chainio::BatchesProved,
         l1_block_number: u64,
     ) -> Result<()> {
         let client = self.base.clone();
@@ -545,7 +530,7 @@ impl ClickhouseWriter {
             if i >= proved.transitions.len() {
                 continue;
             }
-            let single_proved = chainio::ITaikoInbox::BatchesProved {
+            let single_proved = chainio::BatchesProved {
                 verifier: proved.verifier,
                 batchIds: vec![*batch_id],
                 transitions: vec![proved.transitions[i].clone()],
@@ -561,7 +546,7 @@ impl ClickhouseWriter {
     /// Insert forced inclusion processed row
     pub async fn insert_forced_inclusion(
         &self,
-        event: &chainio::taiko::wrapper::ITaikoWrapper::ForcedInclusionProcessed,
+        event: &chainio::ForcedInclusionProcessed,
     ) -> Result<()> {
         let client = self.base.clone();
         let row = ForcedInclusionProcessedRow::try_from(event)?;
@@ -592,20 +577,6 @@ impl ClickhouseWriter {
         Ok(())
     }
 
-    /// Insert verified batch row
-    pub async fn insert_verified_batch(
-        &self,
-        verified: &chainio::BatchesVerified,
-        l1_block_number: u64,
-    ) -> Result<()> {
-        let client = self.base.clone();
-        let verified_row = VerifiedBatchRow::try_from((verified, l1_block_number))?;
-        let mut insert = client.insert(&format!("{}.verified_batches", self.db_name))?;
-        insert.write(&verified_row).await?;
-        insert.end().await?;
-        Ok(())
-    }
-
     /// Insert orphaned L2 block hashes
     pub async fn insert_orphaned_hashes(&self, hashes: &[(HashBytes, u64)]) -> Result<()> {
         if hashes.is_empty() {
@@ -632,7 +603,10 @@ mod tests {
     use super::*;
 
     use alloy::primitives::{Address, B256};
-    use chainio::{ITaikoInbox, taiko::wrapper::ITaikoWrapper};
+    use chainio::{
+        BatchInfo, BatchMetadata, BatchProposed, BatchesProved, ForcedInclusion,
+        ForcedInclusionProcessed, Transition,
+    };
     use clickhouse::test::{self, Mock, handlers};
 
     #[tokio::test]
@@ -752,21 +726,16 @@ mod tests {
         let url = Url::parse(mock.url()).unwrap();
         let writer = ClickhouseWriter::new(url, "db".to_owned(), "user".into(), "pass".into());
 
-        let batch = ITaikoInbox::BatchProposed {
-            info: ITaikoInbox::BatchInfo {
+        let batch = BatchProposed {
+            info: BatchInfo {
                 proposedIn: 2,
                 blobByteSize: 50,
-                blocks: vec![ITaikoInbox::BlockParams::default(); 1],
+                blocks: vec![chainio::BlockParams; 1],
                 blobHashes: vec![B256::repeat_byte(1)],
                 lastBlockId: 100, // Adding test value for last block ID
                 ..Default::default()
             },
-            meta: ITaikoInbox::BatchMetadata {
-                proposer: Address::repeat_byte(2),
-                batchId: 7,
-                ..Default::default()
-            },
-            ..Default::default()
+            meta: BatchMetadata { proposer: Address::repeat_byte(2), batchId: 7 },
         };
 
         writer.insert_batch(&batch, B256::ZERO).await.unwrap();
@@ -812,12 +781,12 @@ mod tests {
         let url = Url::parse(mock.url()).unwrap();
         let writer = ClickhouseWriter::new(url, "db".to_owned(), "user".into(), "pass".into());
 
-        let transition = ITaikoInbox::Transition {
+        let transition = Transition {
             parentHash: B256::repeat_byte(1),
             blockHash: B256::repeat_byte(2),
             stateRoot: B256::repeat_byte(3),
         };
-        let proved = ITaikoInbox::BatchesProved {
+        let proved = BatchesProved {
             verifier: Address::repeat_byte(4),
             batchIds: vec![8],
             transitions: vec![transition],
@@ -838,27 +807,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn insert_verified_batch_writes_expected_row() {
-        let mock = Mock::new();
-        let ctl = mock.add(handlers::record::<VerifiedBatchRow>());
-
-        let url = Url::parse(mock.url()).unwrap();
-        let writer = ClickhouseWriter::new(url, "db".to_owned(), "user".into(), "pass".into());
-
-        let verified = chainio::BatchesVerified { batch_id: 3, block_hash: [9u8; 32] };
-
-        writer.insert_verified_batch(&verified, 12).await.unwrap();
-
-        let rows: Vec<VerifiedBatchRow> = ctl.collect().await;
-        let expected = VerifiedBatchRow {
-            l1_block_number: 12,
-            batch_id: 3,
-            block_hash: HashBytes::from([9u8; 32]),
-        };
-        assert_eq!(rows, vec![expected]);
-    }
-
-    #[tokio::test]
     async fn insert_forced_inclusion_writes_expected_row() {
         let mock = Mock::new();
         let ctl = mock.add(handlers::record::<ForcedInclusionProcessedRow>());
@@ -866,15 +814,8 @@ mod tests {
         let url = Url::parse(mock.url()).unwrap();
         let writer = ClickhouseWriter::new(url, "db".to_owned(), "user".into(), "pass".into());
 
-        let event = ITaikoWrapper::ForcedInclusionProcessed {
-            forcedInclusion: ITaikoWrapper::ForcedInclusion {
-                blobHash: B256::repeat_byte(5),
-                feeInGwei: 1,
-                createdAtBatchId: 0,
-                blobByteOffset: 0,
-                blobByteSize: 0,
-                blobCreatedIn: 0,
-            },
+        let event = ForcedInclusionProcessed {
+            forcedInclusion: ForcedInclusion { blobHash: B256::repeat_byte(5) },
         };
 
         writer.insert_forced_inclusion(&event).await.unwrap();
@@ -912,20 +853,6 @@ mod tests {
 
         let rows: Vec<ProveCostInsertRow> = ctl.collect().await;
         assert_eq!(rows, vec![ProveCostInsertRow { l1_block_number: 8, batch_id: 9, cost: 55 }]);
-    }
-
-    #[tokio::test]
-    async fn insert_verify_cost_writes_expected_row() {
-        let mock = Mock::new();
-        let ctl = mock.add(handlers::record::<VerifyCostInsertRow>());
-
-        let url = Url::parse(mock.url()).unwrap();
-        let writer = ClickhouseWriter::new(url, "db".to_owned(), "user".into(), "pass".into());
-
-        writer.insert_verify_cost(8, 10, 66).await.unwrap();
-
-        let rows: Vec<VerifyCostInsertRow> = ctl.collect().await;
-        assert_eq!(rows, vec![VerifyCostInsertRow { l1_block_number: 8, batch_id: 10, cost: 66 }]);
     }
 
     #[tokio::test]
@@ -974,20 +901,15 @@ mod tests {
         let url = Url::parse(mock.url()).unwrap();
         let writer = ClickhouseWriter::new(url, "db".to_owned(), "user".into(), "pass".into());
 
-        let batch = ITaikoInbox::BatchProposed {
-            info: ITaikoInbox::BatchInfo {
+        let batch = BatchProposed {
+            info: BatchInfo {
                 proposedIn: 1,
                 blobByteSize: 10,
-                blocks: vec![ITaikoInbox::BlockParams::default(); 1],
+                blocks: vec![chainio::BlockParams; 1],
                 blobHashes: vec![B256::repeat_byte(1); 256],
                 ..Default::default()
             },
-            meta: ITaikoInbox::BatchMetadata {
-                proposer: Address::repeat_byte(2),
-                batchId: 1,
-                ..Default::default()
-            },
-            ..Default::default()
+            meta: BatchMetadata { proposer: Address::repeat_byte(2), batchId: 1 },
         };
 
         let result = writer.insert_batch(&batch, B256::ZERO).await;
@@ -1001,12 +923,12 @@ mod tests {
         let url = Url::parse(mock.url()).unwrap();
         let writer = ClickhouseWriter::new(url, "db".to_owned(), "user".into(), "pass".into());
 
-        let transition = ITaikoInbox::Transition {
+        let transition = Transition {
             parentHash: B256::repeat_byte(1),
             blockHash: B256::repeat_byte(2),
             stateRoot: B256::repeat_byte(3),
         };
-        let proved = ITaikoInbox::BatchesProved {
+        let proved = BatchesProved {
             verifier: Address::repeat_byte(4),
             batchIds: vec![1],
             transitions: vec![transition],

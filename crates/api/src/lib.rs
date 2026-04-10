@@ -32,7 +32,6 @@ use utoipa::OpenApi;
 
         routes::table::blobs_per_batch,
         routes::core::prove_times,
-        routes::core::verify_times,
         routes::core::l1_block_times,
         routes::table::l2_block_times,
         routes::table::l2_gas_used,
@@ -63,7 +62,6 @@ use utoipa::OpenApi;
             BatchPostingTimesResponse,
             BatchBlobsResponse,
             ProveTimesResponse,
-            VerifyTimesResponse,
             L1BlockTimesResponse,
             L2BlockTimesResponse,
             L2GasUsedResponse,
@@ -78,7 +76,6 @@ use utoipa::OpenApi;
             clickhouse_lib::ForcedInclusionProcessedRow,
             clickhouse_lib::L2ReorgRow,
             clickhouse_lib::BatchProveTimeRow,
-            clickhouse_lib::BatchVerifyTimeRow,
             clickhouse_lib::L1BlockTimeRow,
             clickhouse_lib::L2BlockTimeRow,
             clickhouse_lib::L2GasUsedRow,

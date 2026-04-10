@@ -7,9 +7,9 @@
 #![allow(clippy::cognitive_complexity)]
 
 use clickhouse_lib::{
-    BatchBlobCountRow, BatchPostingTimeRow, BatchProveTimeRow, BatchVerifyTimeRow,
-    BlockFeeComponentRow, ForcedInclusionProcessedRow, L1BlockTimeRow, L1DataCostRow,
-    L2BlockTimeRow, L2GasUsedRow, L2TpsRow, ProveCostRow, SlashingEventRow,
+    BatchBlobCountRow, BatchPostingTimeRow, BatchProveTimeRow, BlockFeeComponentRow,
+    ForcedInclusionProcessedRow, L1BlockTimeRow, L1DataCostRow, L2BlockTimeRow, L2GasUsedRow,
+    L2TpsRow, ProveCostRow, SlashingEventRow,
 };
 
 use axum::{Json, http::StatusCode, response::IntoResponse};
@@ -176,13 +176,6 @@ pub struct L2FeesResponse {
 pub struct ProveTimesResponse {
     /// Time to prove individual batches.
     pub batches: Vec<BatchProveTimeRow>,
-}
-
-/// Time to verify individual batches.
-#[derive(Debug, Serialize, ToSchema)]
-pub struct VerifyTimesResponse {
-    /// Time to verify individual batches.
-    pub batches: Vec<BatchVerifyTimeRow>,
 }
 
 /// L1 block numbers grouped by minute.
@@ -394,8 +387,6 @@ pub struct DashboardDataResponse {
     pub batch_posting_cadence_ms: Option<u64>,
     /// Average time to prove a batch in milliseconds.
     pub avg_prove_time_ms: Option<u64>,
-    /// Average time to verify a batch in milliseconds.
-    pub avg_verify_time_ms: Option<u64>,
     /// Average L2 transactions per second.
     pub avg_tps: Option<f64>,
     /// Latest preconfiguration data.
