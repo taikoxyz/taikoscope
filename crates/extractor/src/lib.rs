@@ -489,10 +489,12 @@ impl Extractor {
         const DELAY_MS: u64 = 500;
 
         for attempt in 0..MAX_RETRIES {
-            debug!("Last block id by batch id not found, retrying: attempt #{attempt}");
             match self.get_last_block_id_by_batch_id(batch_id).await? {
                 Some(block_id) => return Ok(block_id),
-                None if attempt < MAX_RETRIES - 1 => sleep(Duration::from_millis(DELAY_MS)).await,
+                None if attempt < MAX_RETRIES - 1 => {
+                    debug!(batch_id, attempt = attempt + 1, max_retries = MAX_RETRIES, "lastBlockIDByBatchID not yet available, retrying");
+                    sleep(Duration::from_millis(DELAY_MS)).await;
+                }
                 None => break,
             }
         }
