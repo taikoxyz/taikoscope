@@ -15,10 +15,18 @@ alloy.workspace = true
 alloy-json-rpc.workspace = true
 alloy-rpc-client.workspace = true
 alloy-rpc-types-eth.workspace = true
+alloy-rpc-types-engine.workspace = true
+alloy-transport-http.workspace = true
 alloy-consensus.workspace = true
 alloy-network-primitives.workspace = true
 derive_more.workspace = true
 eyre.workspace = true
+# Used to construct the JWT-signing HTTP transport for Shasta's
+# `taikoAuth_*` engine-auth RPC methods.
+hyper.workspace = true
+hyper-util.workspace = true
+http-body-util.workspace = true
+tower.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true
 tracing.workspace = true

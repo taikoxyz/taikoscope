@@ -61,6 +61,8 @@ async fn test_get_block_stream() -> Result<()> {
     let ext = Extractor::new(
         ws.clone(),
         ws,
+        None, // no L2 auth RPC for local anvil test
+        None, // no JWT secret
         address!("0xa7B208DE7F35E924D59C2b5f7dE3bb346E8A138C"),
         address!("0x3ea351Db28A9d4833Bf6c519F52766788DE14eC1"),
         // address!("0x962C95233f04Ef08E7FaA84DBd1c5171f06f5616"),

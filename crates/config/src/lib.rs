@@ -36,6 +36,24 @@ pub struct RpcOpts {
     /// Public RPC URL for health checks
     #[clap(long, env = "PUBLIC_RPC")]
     pub public_url: Option<Url>,
+    /// Optional L2 authenticated HTTP RPC URL used for Shasta-era
+    /// `taikoAuth_*` methods (e.g. `taikoAuth_lastBlockIDByBatchID`).
+    ///
+    /// Shasta stores per-proposal metadata off-chain: the inbox contract
+    /// does not expose a read method that returns the last L2 block for a
+    /// proposal, so the extractor has to ask the L2 node, which in turn
+    /// only serves `taikoAuth_*` over its JWT-protected engine endpoint.
+    ///
+    /// When unset, the extractor falls back to the unauthenticated
+    /// `l2_url`, which works on Pacaya-era networks but will fail on
+    /// Shasta with `missing taikoAuth_lastBlockIDByBatchID mapping`.
+    #[clap(long, env = "L2_AUTH_RPC_URL")]
+    pub l2_auth_url: Option<Url>,
+    /// Path to a file containing the JWT secret used to authenticate against
+    /// [`Self::l2_auth_url`]. The file must contain a 32-byte hex string,
+    /// optionally prefixed with `0x`. Required iff `l2_auth_url` is set.
+    #[clap(long, env = "L2_JWT_SECRET_PATH")]
+    pub l2_jwt_secret_path: Option<std::path::PathBuf>,
 }
 
 /// Taiko contract address configuration options
