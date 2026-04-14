@@ -137,7 +137,34 @@ impl ApiState {
 }
 
 /// One-shot ETH price fetch with explicit rate-limit detection.
+///
+/// Tries `CoinGecko` first (historical primary source), then falls back to `Coinbase`
+/// if `CoinGecko` returns an error. `CoinGecko`'s free tier blocks most datacenter
+/// egress IPs (observed 2026-04-14 from GKE), so `Coinbase` acts as the durable
+/// path when the API is deployed from a cloud provider.
 async fn try_fetch_eth_price_once(client: &Client) -> FetchOutcome {
+    match try_coingecko(client).await {
+        FetchOutcome::Success(p) => FetchOutcome::Success(p),
+        // Propagate rate limits from the primary source so the caller can respect Retry-After.
+        FetchOutcome::RateLimited(retry_after) => match try_coinbase(client).await {
+            FetchOutcome::Success(p) => FetchOutcome::Success(p),
+            _ => FetchOutcome::RateLimited(retry_after),
+        },
+        FetchOutcome::OtherError(primary_err) => {
+            tracing::warn!(error = %primary_err, "CoinGecko ETH price fetch failed; trying Coinbase fallback");
+            match try_coinbase(client).await {
+                FetchOutcome::Success(p) => FetchOutcome::Success(p),
+                FetchOutcome::RateLimited(retry_after) => FetchOutcome::RateLimited(retry_after),
+                FetchOutcome::OtherError(fallback_err) => FetchOutcome::OtherError(eyre::eyre!(
+                    "both ETH price sources failed: coingecko={primary_err}; coinbase={fallback_err}"
+                )),
+            }
+        }
+    }
+}
+
+/// Fetch ETH/USD price from `CoinGecko`. Response shape: `{"ethereum":{"usd":<f64>}}`.
+async fn try_coingecko(client: &Client) -> FetchOutcome {
     let url = std::env::var("ETH_PRICE_URL").unwrap_or_else(|_| {
         "https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd".to_owned()
     });
@@ -164,7 +191,41 @@ async fn try_fetch_eth_price_once(client: &Client) -> FetchOutcome {
                         json.get("ethereum").and_then(|e| e.get("usd")).and_then(|v| v.as_f64());
                     match price {
                         Some(p) => FetchOutcome::Success(p),
-                        None => FetchOutcome::OtherError(eyre::eyre!("invalid response")),
+                        None => FetchOutcome::OtherError(eyre::eyre!("invalid coingecko response")),
+                    }
+                }
+                Err(e) => FetchOutcome::OtherError(eyre::Report::from(e)),
+            }
+        }
+        Err(e) => FetchOutcome::OtherError(eyre::Report::from(e)),
+    }
+}
+
+/// Fetch ETH/USD price from `Coinbase`. Response shape:
+/// `{"data":{"base":"ETH","currency":"USD","amount":"<decimal string>"}}`.
+async fn try_coinbase(client: &Client) -> FetchOutcome {
+    let url = std::env::var("ETH_PRICE_COINBASE_URL")
+        .unwrap_or_else(|_| "https://api.coinbase.com/v2/prices/ETH-USD/spot".to_owned());
+
+    match client.get(&url).send().await {
+        Ok(resp) => {
+            if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                let retry_after = parse_retry_after(resp.headers());
+                return FetchOutcome::RateLimited(retry_after);
+            }
+            if let Err(e) = resp.error_for_status_ref() {
+                return FetchOutcome::OtherError(eyre::Report::from(e));
+            }
+            match resp.json::<Value>().await {
+                Ok(json) => {
+                    let amount = json
+                        .get("data")
+                        .and_then(|d| d.get("amount"))
+                        .and_then(|v| v.as_str())
+                        .and_then(|s| s.parse::<f64>().ok());
+                    match amount {
+                        Some(p) if p > 0.0 => FetchOutcome::Success(p),
+                        _ => FetchOutcome::OtherError(eyre::eyre!("invalid coinbase response")),
                     }
                 }
                 Err(e) => FetchOutcome::OtherError(eyre::Report::from(e)),
