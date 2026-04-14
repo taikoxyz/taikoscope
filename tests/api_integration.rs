@@ -231,6 +231,38 @@ async fn blobs_per_batch_desc_order() {
 }
 
 #[tokio::test]
+async fn verify_times_integration() {
+    let mock = Mock::new();
+    mock.add(handlers::provide(vec![clickhouse_lib::BatchVerifyTimeRow {
+        batch_id: 1,
+        seconds_to_verify: 456,
+    }]));
+
+    let url = Url::parse(mock.url()).unwrap();
+    let client =
+        ClickhouseReader::new(url, "test-db".to_owned(), "user".into(), "pass".into()).unwrap();
+
+    let (addr, server) = spawn_server(client).await;
+    wait_for_server(addr).await;
+
+    let resp = reqwest::get(format!(
+        "http://{addr}/{API_VERSION}/verify-times?created[gte]=0&created[lte]=3600000"
+    ))
+    .await
+    .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(
+        body,
+        serde_json::json!({
+            "batches": [ { "batch_id": 1, "seconds_to_verify": 456 } ]
+        })
+    );
+
+    server.abort();
+}
+
+#[tokio::test]
 async fn prove_cost_integration() {
     let mock = Mock::new();
     mock.add(handlers::provide(vec![clickhouse_lib::ProveCostRow {

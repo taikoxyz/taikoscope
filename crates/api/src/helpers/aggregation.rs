@@ -33,6 +33,15 @@ pub const fn prove_bucket_size(range: &TimeRange) -> u64 {
     if size == 0 { 1 } else { size }
 }
 
+/// Determine bucket size for verify time aggregation. Uses a much smaller
+/// bucket than [`bucket_size_from_range`] to capture more data points
+/// since verify events are naturally infrequent.
+pub const fn verify_bucket_size(range: &TimeRange) -> u64 {
+    let base = bucket_size_from_range(range);
+    let size = base / 25;
+    if size == 0 { 1 } else { size }
+}
+
 /// Determine bucket size for blobs-per-batch aggregation. Uses a slightly
 /// smaller bucket than [`bucket_size_from_range`] so that charts show more
 /// detail without overwhelming the client.

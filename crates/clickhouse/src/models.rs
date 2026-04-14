@@ -256,6 +256,15 @@ pub struct BatchProveTimeRow {
     pub seconds_to_prove: u64,
 }
 
+/// Row representing the time it took for a batch to be verified
+#[derive(Debug, Row, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+pub struct BatchVerifyTimeRow {
+    /// Batch ID
+    pub batch_id: u64,
+    /// Seconds between proof and verification
+    pub seconds_to_verify: u64,
+}
+
 /// Row representing the block number seen at a given minute
 #[derive(Debug, Row, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
 pub struct L1BlockTimeRow {

@@ -1024,6 +1024,7 @@ export interface DashboardDataResponse {
   l2_block_cadence_ms: number | null;
   batch_posting_cadence_ms: number | null;
   avg_prove_time_ms: number | null;
+  avg_verify_time_ms: number | null;
   avg_tps: number | null;
   preconf_data: PreconfData | null;
   l2_reorgs: number;

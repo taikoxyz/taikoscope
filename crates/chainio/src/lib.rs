@@ -110,7 +110,22 @@ sol! {
             address indexed actualProver
         );
 
+        #[derive(Default)]
+        struct Batch {
+            bytes32 metaHash;
+            uint64 lastBlockId;
+            uint96 reserved3;
+            uint96 livenessBond;
+            uint64 batchId;
+            uint64 lastBlockTimestamp;
+            uint64 anchorBlockId;
+            uint24 nextTransitionId;
+            uint8 reserved4;
+            uint24 verifiedTransitionId;
+        }
+
         function prove(bytes calldata _data, bytes calldata _proof) external;
+        function getBatch(uint64 batchId) external view returns (Batch memory);
     }
 }
 

@@ -441,11 +441,7 @@ impl Extractor {
         };
 
         let tx_hash = log.transaction_hash.unwrap_or_default();
-        let tx = self
-            .l1_provider
-            .get_transaction_by_hash(tx_hash)
-            .await?
-            .ok_or_else(|| eyre::eyre!("missing proving transaction for {}", tx_hash))?;
+        let tx = self.get_transaction_by_hash_with_retry(tx_hash).await?;
         let proved = decode_batches_proved(decoded.data(), tx.input())?;
 
         Ok(Some((proved, log.block_number.unwrap_or_default(), tx_hash)))
@@ -489,9 +485,9 @@ impl Extractor {
         const DELAY_MS: u64 = 500;
 
         for attempt in 0..MAX_RETRIES {
-            match self.get_last_block_id_by_batch_id(batch_id).await? {
-                Some(block_id) => return Ok(block_id),
-                None if attempt < MAX_RETRIES - 1 => {
+            match self.get_last_block_id_by_batch_id(batch_id).await {
+                Ok(Some(block_id)) => return Ok(block_id),
+                Ok(None) if attempt < MAX_RETRIES - 1 => {
                     debug!(
                         batch_id,
                         attempt = attempt + 1,
@@ -500,20 +496,58 @@ impl Extractor {
                     );
                     sleep(Duration::from_millis(DELAY_MS)).await;
                 }
-                None => break,
+                Ok(None) => break,
+                Err(err) if attempt < MAX_RETRIES - 1 => {
+                    warn!(
+                        error = %err,
+                        batch_id,
+                        attempt = attempt + 1,
+                        max_retries = MAX_RETRIES,
+                        "failed to resolve lastBlockIDByBatchID, retrying"
+                    );
+                    sleep(Duration::from_millis(DELAY_MS)).await;
+                }
+                Err(err) => return Err(err),
             }
         }
 
         Err(eyre::eyre!("missing taikoAuth_lastBlockIDByBatchID mapping for proposal {}", batch_id))
     }
 
-    /// Fetch the last L2 block ID associated with a proposal via Taiko's authenticated RPC.
+    /// Fetch the last L2 block ID associated with a proposal.
+    ///
+    /// Prefer Taiko's authenticated RPC method when available, but fall back to the
+    /// on-chain inbox contract so standard RPC endpoints keep working.
     pub async fn get_last_block_id_by_batch_id(&self, batch_id: u64) -> Result<Option<u64>> {
+        match self.get_last_block_id_by_batch_id_via_rpc(batch_id).await {
+            Ok(Some(block_id)) => Ok(Some(block_id)),
+            Ok(None) | Err(_) => self.get_last_block_id_by_batch_id_via_contract(batch_id).await,
+        }
+    }
+
+    async fn get_last_block_id_by_batch_id_via_rpc(&self, batch_id: u64) -> Result<Option<u64>> {
         let result: Option<U256> = self
             .l2_provider
             .raw_request(Cow::Borrowed("taikoAuth_lastBlockIDByBatchID"), (U256::from(batch_id),))
             .await?;
         Ok(result.map(|value| value.to::<u64>()))
+    }
+
+    async fn get_last_block_id_by_batch_id_via_contract(
+        &self,
+        batch_id: u64,
+    ) -> Result<Option<u64>> {
+        match self.taiko_inbox.getBatch(batch_id).call().await {
+            Ok(batch) => Ok(Some(batch.lastBlockId)),
+            Err(err) => {
+                let message = err.to_string();
+                if message.contains("BatchNotFound") || message.contains("execution reverted") {
+                    Ok(None)
+                } else {
+                    Err(err.into())
+                }
+            }
+        }
     }
 
     async fn get_l1_timestamp_cached(&self, block_number: u64) -> Result<u64> {
@@ -586,7 +620,6 @@ impl Extractor {
         tx_hash: alloy::primitives::B256,
     ) -> Result<alloy_rpc_types_eth::TransactionReceipt> {
         const MAX_RETRIES: u32 = 10;
-        const BASE_DELAY_MS: u64 = 500;
 
         for attempt in 0..MAX_RETRIES {
             match self.l1_provider.get_transaction_receipt(tx_hash).await {
@@ -594,10 +627,7 @@ impl Extractor {
                 Ok(None) => {
                     // Receipt not yet available, retry after delay
                     if attempt < MAX_RETRIES - 1 {
-                        // Exponential backoff with simple jitter: base_delay * 2^attempt + fixed
-                        // jitter
-                        let delay_ms = BASE_DELAY_MS * (1u64 << attempt).min(8) // Cap at 8x base delay
-                            + ((attempt as u64) * 50).min(100); // Add simple jitter
+                        let delay_ms = retry_delay_ms(attempt);
 
                         debug!(
                             attempt = attempt + 1,
@@ -620,6 +650,51 @@ impl Extractor {
         // All retries exhausted
         Err(eyre::eyre!("Receipt not found for transaction hash: {}", tx_hash))
     }
+
+    async fn get_transaction_by_hash_with_retry(
+        &self,
+        tx_hash: alloy::primitives::B256,
+    ) -> Result<alloy_rpc_types_eth::Transaction> {
+        const MAX_RETRIES: u32 = 10;
+
+        for attempt in 0..MAX_RETRIES {
+            match self.l1_provider.get_transaction_by_hash(tx_hash).await {
+                Ok(Some(tx)) => return Ok(tx),
+                Ok(None) if attempt < MAX_RETRIES - 1 => {
+                    let delay_ms = retry_delay_ms(attempt);
+                    debug!(
+                        attempt = attempt + 1,
+                        max_retries = MAX_RETRIES,
+                        delay_ms,
+                        tx_hash = %tx_hash,
+                        "Transaction not found yet, retrying..."
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                }
+                Ok(None) => break,
+                Err(err) if attempt < MAX_RETRIES - 1 => {
+                    let delay_ms = retry_delay_ms(attempt);
+                    warn!(
+                        error = %err,
+                        attempt = attempt + 1,
+                        max_retries = MAX_RETRIES,
+                        delay_ms,
+                        tx_hash = %tx_hash,
+                        "Failed to fetch transaction by hash, retrying..."
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                }
+                Err(err) => return Err(err.into()),
+            }
+        }
+
+        Err(eyre::eyre!("Transaction not found for transaction hash: {}", tx_hash))
+    }
+}
+
+fn retry_delay_ms(attempt: u32) -> u64 {
+    const BASE_DELAY_MS: u64 = 500;
+    BASE_DELAY_MS * (1u64 << attempt).min(8) + ((attempt as u64) * 50).min(100)
 }
 
 fn flatten_blob_hashes(sources: &[chainio::IInbox::DerivationSource]) -> Vec<B256> {

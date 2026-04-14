@@ -1,6 +1,7 @@
 //! Integration tests for the Extractor
 
 use std::{
+    net::TcpStream,
     process::{Child, Command},
     thread::sleep,
     time::Duration,
@@ -31,6 +32,17 @@ impl Drop for Anvil {
     }
 }
 
+fn wait_for_anvil() -> Result<()> {
+    for _ in 0..50 {
+        if TcpStream::connect("127.0.0.1:8545").is_ok() {
+            return Ok(());
+        }
+        sleep(Duration::from_millis(100));
+    }
+
+    Err(eyre::eyre!("Anvil did not start listening on port 8545 in time"))
+}
+
 #[tokio::test]
 async fn test_get_block_stream() -> Result<()> {
     // Spawn Anvil
@@ -41,8 +53,7 @@ async fn test_get_block_stream() -> Result<()> {
             return Ok(());
         }
     };
-    // Give it some time to start
-    sleep(Duration::from_millis(500));
+    wait_for_anvil()?;
 
     let ws: Url = Url::parse("ws://127.0.0.1:8545").unwrap();
 

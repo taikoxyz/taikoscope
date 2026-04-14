@@ -16,9 +16,9 @@ use url::Url;
 use crate::{
     models::{
         BatchBlobCountRow, BatchFeeComponentRow, BatchPostingTimeRow, BatchProveTimeRow,
-        BlockFeeComponentRow, BlockTransactionRow, FailedProposalRow, ForcedInclusionProcessedRow,
-        L1BlockTimeRow, L1DataCostRow, L2BlockTimeRow, L2GasUsedRow, L2ReorgRow, L2TpsRow,
-        PreconfData, ProveCostRow, SequencerBlockRow, SequencerBlocksGrouped,
+        BatchVerifyTimeRow, BlockFeeComponentRow, BlockTransactionRow, FailedProposalRow,
+        ForcedInclusionProcessedRow, L1BlockTimeRow, L1DataCostRow, L2BlockTimeRow, L2GasUsedRow,
+        L2ReorgRow, L2TpsRow, PreconfData, ProveCostRow, SequencerBlockRow, SequencerBlocksGrouped,
         SequencerDistributionRow, SequencerFeeRow, SlashingEventRow,
     },
     types::{AddressBytes, HashBytes},
@@ -1274,6 +1274,56 @@ impl ClickhouseReader {
         if row.avg_ms.is_nan() { Ok(None) } else { Ok(Some(row.avg_ms.round() as u64)) }
     }
 
+    /// Get the average time in milliseconds it takes for a batch to be verified
+    /// for verifications submitted within the given time range
+    pub async fn get_avg_verify_time(&self, range: TimeRange) -> Result<Option<u64>> {
+        #[derive(Row, Deserialize)]
+        struct AvgRow {
+            avg_ms: f64,
+        }
+
+        let mv_query = format!(
+            "SELECT avg(verify_time_ms) AS avg_ms \
+             FROM {db}.batch_verify_times_mv \
+             WHERE verified_at >= now64() - INTERVAL {interval} \
+               AND batch_id != 0",
+            interval = range.interval(),
+            db = self.db_name,
+        );
+
+        let rows = self.execute::<AvgRow>(&mv_query).await?;
+        if let Some(row) = rows.into_iter().next() &&
+            !row.avg_ms.is_nan()
+        {
+            return Ok(Some(row.avg_ms.round() as u64));
+        }
+
+        let fallback_query = format!(
+            "SELECT avg((l1_verified.block_ts - l1_proved.block_ts) * 1000) AS avg_ms \
+             FROM {db}.proved_batches pb \
+             INNER JOIN {db}.verified_batches vb \
+                ON pb.batch_id = vb.batch_id AND pb.block_hash = vb.block_hash \
+             INNER JOIN {db}.l1_head_events l1_proved \
+                ON pb.l1_block_number = l1_proved.l1_block_number \
+             INNER JOIN {db}.l1_head_events l1_verified \
+                ON vb.l1_block_number = l1_verified.l1_block_number \
+             WHERE l1_verified.block_ts >= (toUInt64(now()) - {secs}) \
+               AND l1_verified.block_ts > l1_proved.block_ts \
+               AND (l1_verified.block_ts - l1_proved.block_ts) > 60 \
+               AND pb.batch_id != 0",
+            secs = range.seconds(),
+            db = self.db_name,
+        );
+
+        let rows = self.execute::<AvgRow>(&fallback_query).await?;
+        let row = match rows.into_iter().next() {
+            Some(r) => r,
+            None => return Ok(None),
+        };
+
+        if row.avg_ms.is_nan() { Ok(None) } else { Ok(Some(row.avg_ms.round() as u64)) }
+    }
+
     /// Get the average interval in milliseconds between consecutive L2 blocks
     /// observed within the given range.
     pub async fn get_l2_block_cadence(
@@ -1613,6 +1663,164 @@ impl ClickhouseReader {
 
         let rows = self.execute::<BatchProveTimeRow>(&fallback_query).await?;
         Ok(rows)
+    }
+
+    /// Get verify times in seconds for batches verified within the given range
+    pub async fn get_verify_times(
+        &self,
+        range: TimeRange,
+        bucket: Option<u64>,
+    ) -> Result<Vec<BatchVerifyTimeRow>> {
+        let bucket = bucket.unwrap_or(1);
+
+        if bucket <= 1 {
+            let mv_query = format!(
+                "SELECT batch_id, toUInt64(verify_time_ms / 1000) AS seconds_to_verify \
+                 FROM {db}.batch_verify_times_mv \
+                 WHERE verified_at >= now64() - INTERVAL {interval} \
+                   AND verify_time_ms > 60000 \
+                   AND batch_id != 0 \
+                 ORDER BY batch_id ASC",
+                interval = range.interval(),
+                db = self.db_name,
+            );
+
+            let rows = self.execute::<BatchVerifyTimeRow>(&mv_query).await?;
+            if !rows.is_empty() {
+                return Ok(rows);
+            }
+
+            let fallback_query = format!(
+                "SELECT toUInt64(pb.batch_id) AS batch_id, \
+                        (l1_verified.block_ts - l1_proved.block_ts) AS seconds_to_verify \
+                 FROM {db}.proved_batches pb \
+                 INNER JOIN {db}.verified_batches vb \
+                    ON pb.batch_id = vb.batch_id AND pb.block_hash = vb.block_hash \
+                 INNER JOIN {db}.l1_head_events l1_proved \
+                    ON pb.l1_block_number = l1_proved.l1_block_number \
+                 INNER JOIN {db}.l1_head_events l1_verified \
+                    ON vb.l1_block_number = l1_verified.l1_block_number \
+                 WHERE l1_verified.block_ts >= (toUInt64(now()) - {secs}) \
+                   AND l1_verified.block_ts > l1_proved.block_ts \
+                   AND (l1_verified.block_ts - l1_proved.block_ts) > 60 \
+                   AND pb.batch_id != 0",
+                secs = range.seconds(),
+                db = self.db_name,
+            );
+
+            return self.execute::<BatchVerifyTimeRow>(&fallback_query).await;
+        }
+
+        let mv_query = format!(
+            "SELECT batch_bucket AS batch_id, \
+                    toUInt64(avg(seconds_to_verify)) AS seconds_to_verify \
+             FROM ( \
+                SELECT intDiv(batch_id, {bucket}) * {bucket} AS batch_bucket, \
+                       toUInt64(verify_time_ms / 1000) AS seconds_to_verify \
+                FROM {db}.batch_verify_times_mv \
+                WHERE verified_at >= now64() - INTERVAL {interval} \
+                  AND verify_time_ms > 60000 \
+                  AND batch_id != 0 \
+             ) AS sub \
+             GROUP BY batch_bucket \
+             ORDER BY batch_bucket ASC",
+            bucket = bucket,
+            interval = range.interval(),
+            db = self.db_name,
+        );
+
+        let rows = self.execute::<BatchVerifyTimeRow>(&mv_query).await?;
+        if !rows.is_empty() {
+            return Ok(rows);
+        }
+
+        let fallback_query = format!(
+            "SELECT batch_bucket AS batch_id, \
+                    toUInt64(avg(seconds_to_verify)) AS seconds_to_verify \
+             FROM ( \
+                SELECT intDiv(pb.batch_id, {bucket}) * {bucket} AS batch_bucket, \
+                       (l1_verified.block_ts - l1_proved.block_ts) AS seconds_to_verify \
+                FROM {db}.proved_batches pb \
+                INNER JOIN {db}.verified_batches vb \
+                   ON pb.batch_id = vb.batch_id AND pb.block_hash = vb.block_hash \
+                INNER JOIN {db}.l1_head_events l1_proved \
+                   ON pb.l1_block_number = l1_proved.l1_block_number \
+                INNER JOIN {db}.l1_head_events l1_verified \
+                   ON vb.l1_block_number = l1_verified.l1_block_number \
+                WHERE l1_verified.block_ts >= (toUInt64(now()) - {secs}) \
+                  AND l1_verified.block_ts > l1_proved.block_ts \
+                  AND (l1_verified.block_ts - l1_proved.block_ts) > 60 \
+                  AND pb.batch_id != 0 \
+             ) AS sub \
+             GROUP BY batch_bucket \
+             ORDER BY batch_bucket ASC",
+            bucket = bucket,
+            secs = range.seconds(),
+            db = self.db_name,
+        );
+
+        self.execute::<BatchVerifyTimeRow>(&fallback_query).await
+    }
+
+    /// Get verify times with cursor-based pagination
+    /// Results are returned in descending order by batch id
+    pub async fn get_verify_times_paginated(
+        &self,
+        since: DateTime<Utc>,
+        limit: u64,
+        starting_after: Option<u64>,
+        ending_before: Option<u64>,
+    ) -> Result<Vec<BatchVerifyTimeRow>> {
+        let mut mv_query = format!(
+            "SELECT batch_id, toUInt64(verify_time_ms / 1000) AS seconds_to_verify \
+             FROM {db}.batch_verify_times_mv \
+             WHERE verified_at >= toDateTime64({since}, 3) \
+               AND verify_time_ms > 60000 \
+               AND batch_id != 0",
+            since = since.timestamp(),
+            db = self.db_name,
+        );
+        if let Some(start) = starting_after {
+            mv_query.push_str(&format!(" AND batch_id < {}", start));
+        }
+        if let Some(end) = ending_before {
+            mv_query.push_str(&format!(" AND batch_id > {}", end));
+        }
+        mv_query.push_str(" ORDER BY batch_id DESC");
+        mv_query.push_str(&format!(" LIMIT {}", limit));
+
+        let rows = self.execute::<BatchVerifyTimeRow>(&mv_query).await?;
+        if !rows.is_empty() {
+            return Ok(rows);
+        }
+
+        let mut fallback_query = format!(
+            "SELECT toUInt64(pb.batch_id) AS batch_id, \
+                    (l1_verified.block_ts - l1_proved.block_ts) AS seconds_to_verify \
+             FROM {db}.proved_batches pb \
+             INNER JOIN {db}.verified_batches vb \
+                ON pb.batch_id = vb.batch_id AND pb.block_hash = vb.block_hash \
+             INNER JOIN {db}.l1_head_events l1_proved \
+                ON pb.l1_block_number = l1_proved.l1_block_number \
+             INNER JOIN {db}.l1_head_events l1_verified \
+                ON vb.l1_block_number = l1_verified.l1_block_number \
+             WHERE l1_verified.block_ts >= {since} \
+               AND l1_verified.block_ts > l1_proved.block_ts \
+               AND (l1_verified.block_ts - l1_proved.block_ts) > 60 \
+               AND pb.batch_id != 0",
+            since = since.timestamp(),
+            db = self.db_name,
+        );
+        if let Some(start) = starting_after {
+            fallback_query.push_str(&format!(" AND pb.batch_id < {}", start));
+        }
+        if let Some(end) = ending_before {
+            fallback_query.push_str(&format!(" AND pb.batch_id > {}", end));
+        }
+        fallback_query.push_str(" ORDER BY pb.batch_id DESC");
+        fallback_query.push_str(&format!(" LIMIT {}", limit));
+
+        self.execute::<BatchVerifyTimeRow>(&fallback_query).await
     }
 
     /// Get L1 block numbers grouped by minute for the given range
