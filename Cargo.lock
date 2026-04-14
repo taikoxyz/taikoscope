@@ -458,6 +458,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "alloy-rpc-types-engine"
+version = "1.0.34"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "301962bdc2f084bf25e86abe64d41c8a3ca1398d41d6f3416b6fffe2fe1620fc"
+dependencies = [
+ "alloy-consensus",
+ "alloy-eips",
+ "alloy-primitives",
+ "alloy-rlp",
+ "alloy-serde",
+ "derive_more 2.0.1",
+ "jsonwebtoken",
+ "rand 0.8.5",
+ "serde",
+ "strum",
+]
+
+[[package]]
 name = "alloy-rpc-types-eth"
 version = "1.0.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -624,7 +642,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f3c4d2c0052de0d82fcb2acea16bf3fe105fd4c37d108a331c777942648e8711"
 dependencies = [
  "alloy-json-rpc",
+ "alloy-rpc-types-engine",
  "alloy-transport",
+ "http-body-util",
+ "hyper",
+ "hyper-tls",
+ "hyper-util",
+ "jsonwebtoken",
  "reqwest",
  "serde_json",
  "tower",
@@ -1857,16 +1881,22 @@ dependencies = [
  "alloy-json-rpc",
  "alloy-network-primitives",
  "alloy-rpc-client",
+ "alloy-rpc-types-engine",
  "alloy-rpc-types-eth",
  "alloy-sol-types",
+ "alloy-transport-http",
  "chainio",
  "dashmap",
  "derive_more 1.0.0",
  "eyre",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
  "network",
  "primitives",
  "tokio",
  "tokio-stream",
+ "tower",
  "tracing",
  "url",
 ]
@@ -2648,6 +2678,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "jsonwebtoken"
+version = "9.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a87cc7a48537badeae96744432de36f4be2b4a34a05a5ef32e9dd8a1c169dde"
+dependencies = [
+ "base64",
+ "js-sys",
+ "pem",
+ "ring",
+ "serde",
+ "serde_json",
+ "simple_asn1",
+]
+
+[[package]]
 name = "k256"
 version = "0.13.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3085,6 +3130,16 @@ name = "paste"
 version = "1.0.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
+
+[[package]]
+name = "pem"
+version = "3.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d30c53c26bc5b31a98cd02d20f25a7c8567146caf63ed593a9d87b2775291be"
+dependencies = [
+ "base64",
+ "serde_core",
+]
 
 [[package]]
 name = "percent-encoding"
@@ -4164,6 +4219,18 @@ name = "similar"
 version = "2.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbbb5d9659141646ae647b42fe094daf6c6192d1620870b449d9557f748b2daa"
+
+[[package]]
+name = "simple_asn1"
+version = "0.6.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "297f631f50729c8c99b84667867963997ec0b50f32b2a7dbcab828ef0541e8bb"
+dependencies = [
+ "num-bigint",
+ "num-traits",
+ "thiserror 2.0.16",
+ "time",
+]
 
 [[package]]
 name = "slab"

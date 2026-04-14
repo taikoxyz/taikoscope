@@ -15,11 +15,16 @@ use alloy::{
     sol_types::{SolCall, SolValue},
 };
 use alloy_consensus::{BlockHeader, Transaction};
-use alloy_rpc_client::ClientBuilder;
+use alloy_rpc_client::{ClientBuilder, RpcClient};
+use alloy_rpc_types_engine::JwtSecret;
+use alloy_transport_http::{AuthLayer, Http, HyperClient};
 use chainio::TaikoInbox;
 use dashmap::DashMap;
 use derive_more::Debug;
 use eyre::{Context, Result};
+use http_body_util::Full;
+use hyper::body::Bytes as HyperBytes;
+use hyper_util::{client::legacy::Client as HyperLegacyClient, rt::TokioExecutor};
 use network::retries::{DEFAULT_RETRY_LAYER, RetryWsConnect};
 use primitives::{
     block_stats::compute_block_stats,
@@ -27,6 +32,7 @@ use primitives::{
 };
 use tokio::{sync::mpsc, time::sleep};
 use tokio_stream::{Stream, StreamExt, wrappers::UnboundedReceiverStream};
+use tower::ServiceBuilder;
 use tracing::{debug, error, info, warn};
 use url::Url;
 
@@ -39,6 +45,12 @@ pub struct Extractor {
     l1_provider: DefaultProvider,
     #[debug(skip)]
     l2_provider: DefaultProvider,
+    /// Optional JWT-authenticated L2 HTTP provider used exclusively for
+    /// Shasta-era `taikoAuth_*` RPC methods (e.g. `taikoAuth_lastBlockIDByBatchID`).
+    /// When `None`, the extractor falls back to `l2_provider`, which works on
+    /// Pacaya-era networks but will return `None` for Shasta proposals.
+    #[debug(skip)]
+    l2_auth_provider: Option<DefaultProvider>,
     preconf_whitelist: TaikoPreconfWhitelist,
     taiko_inbox: TaikoInbox,
     anchor_address: Address,
@@ -67,10 +79,17 @@ pub struct DecodedBatchProposed {
 }
 
 impl Extractor {
-    /// Create a new extractor
+    /// Create a new extractor.
+    ///
+    /// `l2_auth_rpc_url` and `l2_jwt_secret_hex` are both optional and must be
+    /// supplied together. When present they configure a dedicated JWT-signing
+    /// HTTP provider used for Shasta-era `taikoAuth_*` methods (see
+    /// [`Self::get_last_block_id_by_batch_id_via_rpc`]).
     pub async fn new(
         l1_rpc_url: Url,
         l2_rpc_url: Url,
+        l2_auth_rpc_url: Option<Url>,
+        l2_jwt_secret_hex: Option<String>,
         inbox_address: Address,
         preconf_whitelist_address: Address,
         anchor_address: Address,
@@ -108,6 +127,21 @@ impl Extractor {
             )?;
         let l2_provider = ProviderBuilder::new().connect_client(l2_client);
 
+        let l2_auth_provider = match (l2_auth_rpc_url.as_ref(), l2_jwt_secret_hex.as_ref()) {
+            (Some(url), Some(secret_hex)) => Some(build_l2_auth_provider(url.clone(), secret_hex)?),
+            (None, None) => None,
+            (Some(_), None) => {
+                return Err(eyre::eyre!(
+                    "L2_AUTH_RPC_URL is set but L2_JWT_SECRET_PATH is not — both must be provided together"
+                ));
+            }
+            (None, Some(_)) => {
+                return Err(eyre::eyre!(
+                    "L2_JWT_SECRET_PATH is set but L2_AUTH_RPC_URL is not — both must be provided together"
+                ));
+            }
+        };
+
         let taiko_inbox = TaikoInbox::new_readonly(inbox_address, l1_provider.clone());
         let preconf_whitelist =
             TaikoPreconfWhitelist::new_readonly(preconf_whitelist_address, l1_provider.clone());
@@ -117,6 +151,7 @@ impl Extractor {
         Ok(Self {
             l1_provider,
             l2_provider,
+            l2_auth_provider,
             preconf_whitelist,
             taiko_inbox,
             anchor_address,
@@ -527,8 +562,12 @@ impl Extractor {
     }
 
     async fn get_last_block_id_by_batch_id_via_rpc(&self, batch_id: u64) -> Result<Option<u64>> {
-        let result: Option<U256> = self
-            .l2_provider
+        // The `taikoAuth_*` namespace only exists on Taiko geth's JWT-protected
+        // engine endpoint. Prefer the dedicated auth provider when configured;
+        // otherwise fall back to the main L2 provider for backwards compat with
+        // Pacaya-era networks where the method was exposed unauthenticated.
+        let provider = self.l2_auth_provider.as_ref().unwrap_or(&self.l2_provider);
+        let result: Option<U256> = provider
             .raw_request(Cow::Borrowed("taikoAuth_lastBlockIDByBatchID"), (U256::from(batch_id),))
             .await?;
         Ok(result.map(|value| value.to::<u64>()))
@@ -691,6 +730,35 @@ impl Extractor {
 
         Err(eyre::eyre!("Transaction not found for transaction hash: {}", tx_hash))
     }
+}
+
+/// Build a JWT-signing HTTP provider against Taiko geth's engine-auth endpoint.
+///
+/// Uses [`alloy_transport_http::AuthLayer`] via a `hyper_util` legacy client,
+/// following the pattern documented in `alloy_provider`'s `test_auth_layer_transport`
+/// test. The resulting provider is a drop-in replacement for any other
+/// [`DefaultProvider`] — it signs a fresh JWT bearer per request and sends it in
+/// the `Authorization` header.
+///
+/// `secret_hex` may be a 64-character hex string with or without a `0x` prefix.
+fn build_l2_auth_provider(url: Url, secret_hex: &str) -> Result<DefaultProvider> {
+    // Tolerate whitespace from file reads and an optional 0x prefix.
+    let trimmed = secret_hex.trim();
+    let trimmed =
+        trimmed.strip_prefix("0x").or_else(|| trimmed.strip_prefix("0X")).unwrap_or(trimmed);
+    let secret = JwtSecret::from_hex(trimmed)
+        .wrap_err("invalid L2 JWT secret: expected 32-byte hex string")?;
+
+    let hyper_client =
+        HyperLegacyClient::builder(TokioExecutor::new()).build_http::<Full<HyperBytes>>();
+    let service = ServiceBuilder::new().layer(AuthLayer::new(secret)).service(hyper_client);
+    let hyper_transport = HyperClient::with_service(service);
+    let http = Http::with_client(hyper_transport, url);
+    // The engine-auth endpoint is effectively local from the extractor's
+    // perspective (single-hop to a Taiko geth we control), so `is_local=true`
+    // is fine — it only affects batching heuristics in alloy.
+    let rpc_client = RpcClient::new(http, true);
+    Ok(ProviderBuilder::new().connect_client(rpc_client))
 }
 
 fn retry_delay_ms(attempt: u32) -> u64 {

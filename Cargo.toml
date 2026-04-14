@@ -29,6 +29,16 @@ repository = "https://github.com/chainbound/taikoscope"
 [workspace.dependencies]
 # Alloy dependencies - optimize features for faster compilation while preserving functionality
 alloy = { version = "1.0.34", features = ["provider-ws", "contract", "rpc-types", "sol-types", "reqwest"] }
+# JWT-auth HTTP transport for Shasta's `taikoAuth_*` engine-auth RPC methods.
+# Pulled in directly because the alloy umbrella crate does not expose the
+# `jwt-auth` feature on `alloy-transport-http`.
+alloy-transport-http = { version = "1.0.34", default-features = false, features = ["jwt-auth"] }
+alloy-rpc-types-engine = { version = "1.0.34", default-features = false, features = ["jwt", "serde"] }
+# Transitive hyper ecosystem deps, pulled in directly so the extractor can
+# construct a JWT-auth HTTP RPC client against Taiko's engine-auth endpoint.
+hyper = { version = "1", default-features = false }
+hyper-util = { version = "0.1", features = ["client", "client-legacy", "http1", "tokio"], default-features = false }
+http-body-util = { version = "0.1", default-features = false }
 alloy-contract = { version = "1.0.34" }
 alloy-json-rpc = { version = "1.0.34" }
 alloy-rpc-client = { version = "1.0.34" }

@@ -87,9 +87,21 @@ impl Driver {
             info!("Instatus monitors disabled; no incidents will be reported");
         }
 
+        // Optional Shasta-era JWT auth for `taikoAuth_*` methods. Read the secret
+        // file once here so any IO error surfaces at startup rather than per-proposal.
+        let l2_jwt_secret_hex =
+            match opts.rpc.l2_jwt_secret_path.as_ref() {
+                Some(path) => Some(std::fs::read_to_string(path).wrap_err_with(|| {
+                    format!("failed to read L2 JWT secret at {}", path.display())
+                })?),
+                None => None,
+            };
+
         let extractor = Extractor::new(
             opts.rpc.l1_url.clone(),
             opts.rpc.l2_url.clone(),
+            opts.rpc.l2_auth_url.clone(),
+            l2_jwt_secret_hex,
             opts.taiko_addresses.inbox_address,
             opts.taiko_addresses.preconf_whitelist_address,
             opts.taiko_addresses.anchor_address,
