@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BatchProposedWrapper {
     pub batch: chainio::ITaikoInbox::BatchProposed,
+    pub l1_block_number: u64,
     pub l1_tx_hash: B256,
     pub removed: bool,
 }
@@ -36,9 +37,9 @@ pub struct ForcedInclusionProcessedWrapper {
 }
 
 // Updated From implementations to preserve all metadata
-impl From<(chainio::ITaikoInbox::BatchProposed, B256, bool)> for BatchProposedWrapper {
-    fn from(data: (chainio::ITaikoInbox::BatchProposed, B256, bool)) -> Self {
-        Self { batch: data.0, l1_tx_hash: data.1, removed: data.2 }
+impl From<(chainio::ITaikoInbox::BatchProposed, u64, B256, bool)> for BatchProposedWrapper {
+    fn from(data: (chainio::ITaikoInbox::BatchProposed, u64, B256, bool)) -> Self {
+        Self { batch: data.0, l1_block_number: data.1, l1_tx_hash: data.2, removed: data.3 }
     }
 }
 

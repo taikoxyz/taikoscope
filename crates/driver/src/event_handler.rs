@@ -47,12 +47,13 @@ impl<'a> EventHandler<'a> {
     /// Handles a batch proposed event, inserting the batch and calculating L1 data costs
     pub async fn handle_batch_proposed(&self, wrapper: BatchProposedWrapper) -> Result<()> {
         let batch = &wrapper.batch;
+        let l1_block_number = wrapper.l1_block_number;
         let l1_tx_hash = wrapper.l1_tx_hash;
 
         // Insert batch with error handling
         if self.enable_db_writes {
             crate::event_processing::with_db_error_context(
-                self.writer.insert_batch(batch, l1_tx_hash),
+                self.writer.insert_batch(batch, l1_block_number, l1_tx_hash),
                 "insert batch",
                 format!("batch_last_block={:?}", batch.last_block_number()),
             )
@@ -72,18 +73,14 @@ impl<'a> EventHandler<'a> {
         {
             if self.enable_db_writes {
                 crate::event_processing::with_db_error_context(
-                    self.writer.insert_l1_data_cost(
-                        batch.info.proposedIn,
-                        batch.meta.batchId,
-                        cost,
-                    ),
+                    self.writer.insert_l1_data_cost(l1_block_number, batch.meta.batchId, cost),
                     "insert L1 data cost",
-                    format!("l1_block_number={}, tx_hash={:?}", batch.info.proposedIn, l1_tx_hash),
+                    format!("l1_block_number={}, tx_hash={:?}", l1_block_number, l1_tx_hash),
                 )
                 .await?;
             } else {
                 info!(
-                    l1_block_number = batch.info.proposedIn,
+                    l1_block_number = l1_block_number,
                     batch_id = batch.meta.batchId,
                     cost = cost,
                     "🧪 DRY-RUN: Would insert L1 data cost"

@@ -3,10 +3,10 @@
 
 use std::{collections::HashSet, time::Duration};
 
-use alloy_primitives::Address;
+use alloy_primitives::{Address, B256};
 use clickhouse::{AddressBytes, ClickhouseReader, ClickhouseWriter, HashBytes, L2HeadEvent};
 use extractor::Extractor;
-use eyre::Result;
+use eyre::{Context, Result};
 use messages::{
     BatchProposedWrapper, BatchesProvedWrapper, BatchesVerifiedWrapper,
     ForcedInclusionProcessedWrapper,
@@ -70,8 +70,176 @@ async fn verify_rpc_health(extractor: &Extractor) -> bool {
     }
 }
 
+async fn collect_batch_proposed_wrappers_for_l1_range(
+    extractor: &Extractor,
+    inbox_address: Address,
+    start_block: u64,
+    end_block: u64,
+) -> Result<Vec<BatchProposedWrapper>> {
+    use chainio::ITaikoInbox::BatchProposed;
+
+    let mut wrappers = Vec::new();
+
+    for block_number in start_block..=end_block {
+        let block = retry_with_backoff(
+            || extractor.get_l1_block_by_number(block_number),
+            &format!("fetch L1 block {block_number}"),
+        )
+        .await
+        .wrap_err_with(|| {
+            format!("failed to fetch L1 block {block_number} for batch data repair")
+        })?;
+
+        for tx_hash in block.transactions.hashes() {
+            let receipt = retry_with_backoff(
+                || extractor.get_receipt(tx_hash),
+                &format!("fetch receipt {tx_hash}"),
+            )
+            .await
+            .wrap_err_with(|| {
+                format!("failed to fetch receipt {tx_hash} while repairing L1 block {block_number}")
+            })?;
+
+            for log in receipt.logs() {
+                if log.removed || log.address() != inbox_address {
+                    continue;
+                }
+
+                if let Ok(decoded) = log.log_decode::<BatchProposed>() {
+                    wrappers.push(BatchProposedWrapper::from((
+                        decoded.data().clone(),
+                        log.block_number.unwrap_or(block_number),
+                        tx_hash,
+                        false,
+                    )));
+                }
+            }
+        }
+    }
+
+    Ok(wrappers)
+}
+
+async fn detect_repair_start_block(
+    reader: &ClickhouseReader,
+    extractor: &Extractor,
+    limit: u64,
+) -> Result<Option<u64>> {
+    let recent_batches = reader.get_recent_batch_rows(limit).await?;
+    let mut earliest_mismatch = None;
+
+    for batch in recent_batches {
+        let receipt = match extractor.get_receipt(B256::from(batch.l1_tx_hash)).await {
+            Ok(receipt) => receipt,
+            Err(_) => continue,
+        };
+
+        let actual_block = receipt.block_number;
+        if let Some(block_number) = actual_block &&
+            block_number != batch.l1_block_number
+        {
+            earliest_mismatch = Some(block_number);
+        }
+    }
+
+    Ok(earliest_mismatch)
+}
+
 /// Gap detection and backfill methods for the Driver
 impl crate::driver::Driver {
+    /// Repair `BatchProposed`-derived rows for an explicit L1 block range.
+    pub async fn repair_batch_proposed_data_range(
+        &self,
+        start_block: u64,
+        end_block: u64,
+    ) -> Result<()> {
+        if start_block > end_block {
+            eyre::bail!("repair batch data start block must not exceed end block");
+        }
+
+        if !self.enable_db_writes {
+            eyre::bail!("batch data repair requires database writes to be enabled");
+        }
+
+        let writer = self
+            .clickhouse_writer
+            .as_ref()
+            .ok_or_else(|| eyre::eyre!("ClickHouse writer not available for batch data repair"))?;
+
+        info!(
+            start_block = start_block,
+            end_block = end_block,
+            "Collecting BatchProposed events for batch data repair"
+        );
+        let wrappers = collect_batch_proposed_wrappers_for_l1_range(
+            &self.extractor,
+            self.inbox_address,
+            start_block,
+            end_block,
+        )
+        .await?;
+
+        if wrappers.is_empty() {
+            info!(
+                start_block = start_block,
+                end_block = end_block,
+                "No BatchProposed events found in repair range"
+            );
+            return Ok(());
+        }
+
+        let batch_ids =
+            wrappers.iter().map(|wrapper| wrapper.batch.meta.batchId).collect::<Vec<_>>();
+        let unique_batch_count = batch_ids.iter().copied().collect::<HashSet<_>>().len();
+
+        info!(
+            start_block = start_block,
+            end_block = end_block,
+            events_found = wrappers.len(),
+            unique_batch_count = unique_batch_count,
+            "Deleting stale BatchProposed-derived rows before replay"
+        );
+        writer.delete_batch_proposed_data(&batch_ids).await?;
+
+        let handler = EventHandler::new(writer, &self.extractor, true);
+        for wrapper in wrappers {
+            handler.handle_batch_proposed(wrapper).await?;
+        }
+
+        info!(
+            start_block = start_block,
+            end_block = end_block,
+            repaired_batches = unique_batch_count,
+            "Completed batch data repair"
+        );
+        Ok(())
+    }
+
+    /// Detect a likely stale repair range from recent batch rows and repair it.
+    pub async fn auto_repair_batch_proposed_data(&self, lookback_batches: u64) -> Result<()> {
+        let reader = self
+            .clickhouse_reader
+            .as_ref()
+            .ok_or_else(|| eyre::eyre!("ClickHouse reader not available for batch data repair"))?;
+
+        let Some(start_block) =
+            detect_repair_start_block(reader, &self.extractor, lookback_batches).await?
+        else {
+            info!(
+                lookback_batches = lookback_batches,
+                "No BatchProposed mismatch detected in recent batches"
+            );
+            return Ok(());
+        };
+
+        let end_block = reader
+            .get_latest_l1_block()
+            .await?
+            .ok_or_else(|| eyre::eyre!("No L1 blocks available to bound batch data repair"))?;
+
+        self.repair_batch_proposed_data_range(start_block, end_block).await
+    }
+
     /// Start the gap detection and backfill task
     pub async fn start_gap_detection_task(&self) -> Option<tokio::task::JoinHandle<()>> {
         // Only start gap detection if we have a reader
@@ -687,6 +855,7 @@ pub async fn process_l1_block_taiko_events(
                             );
                             let wrapper = BatchProposedWrapper::from((
                                 decoded.data().clone(),
+                                block_number,
                                 tx_hash,
                                 false, // not reorged
                             ));
@@ -1110,6 +1279,7 @@ pub fn decode_taiko_event_from_log(
         if let Ok(decoded) = log.log_decode::<BatchProposed>() {
             let wrapper = messages::BatchProposedWrapper::from((
                 decoded.data().clone(),
+                l1_block_number,
                 l1_tx_hash,
                 false, // not reorged
             ));
