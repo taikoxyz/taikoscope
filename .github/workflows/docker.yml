@@ -8,6 +8,7 @@ on:
   push:
     branches:
       - main
+      - shasta-taikoscope
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
