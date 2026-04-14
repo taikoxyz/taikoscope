@@ -211,6 +211,37 @@ pub struct Opts {
     /// Minimum L2 block number to backfill
     #[clap(long, env = "GAP_MIN_L2_BLOCK")]
     pub gap_min_l2_block: u64,
+
+    /// Start of the L1 block range used for one-shot `BatchProposed` data repair
+    #[clap(long, env = "REPAIR_BATCH_DATA_START_L1_BLOCK")]
+    pub repair_batch_data_start_l1_block: Option<u64>,
+
+    /// End of the L1 block range used for one-shot `BatchProposed` data repair
+    #[clap(long, env = "REPAIR_BATCH_DATA_END_L1_BLOCK")]
+    pub repair_batch_data_end_l1_block: Option<u64>,
+
+    /// Number of recent batches to inspect when auto-detecting a repair range
+    #[clap(long, env = "REPAIR_BATCH_DATA_LOOKBACK_BATCHS", default_value = "500")]
+    pub repair_batch_data_lookback_batches: u64,
+}
+
+impl Opts {
+    /// Returns the requested one-shot batch data repair range, if configured.
+    pub fn repair_batch_data_range(&self) -> Result<Option<(u64, u64)>, String> {
+        match (self.repair_batch_data_start_l1_block, self.repair_batch_data_end_l1_block) {
+            (None, None) => Ok(None),
+            (Some(start), Some(end)) if start <= end => Ok(Some((start, end))),
+            (Some(start), Some(end)) => Err(format!(
+                "repair batch data start block {start} is greater than end block {end}"
+            )),
+            (Some(_), None) => {
+                Err("repair batch data end L1 block is required when the start block is set".into())
+            }
+            (None, Some(_)) => {
+                Err("repair batch data start L1 block is required when the end block is set".into())
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -308,6 +339,7 @@ mod tests {
         assert!(!opts.gap_dry_run);
         assert_eq!(opts.gap_min_l1_block, 1);
         assert_eq!(opts.gap_min_l2_block, 1);
+        assert_eq!(opts.repair_batch_data_range().unwrap(), None);
     }
 
     #[test]
@@ -374,6 +406,7 @@ mod tests {
         assert!(opts.gap_dry_run);
         assert_eq!(opts.gap_min_l1_block, 1);
         assert_eq!(opts.gap_min_l2_block, 1);
+        assert_eq!(opts.repair_batch_data_range().unwrap(), None);
 
         // Clean up after test
         unsafe {
@@ -410,5 +443,51 @@ mod tests {
         assert!(origins.contains(&"https://www.taikoscope.xyz"));
         assert!(origins.contains(&"https://hekla.taikoscope.xyz"));
         assert!(origins.contains(&"https://www.hekla.taikoscope.xyz"));
+    }
+
+    #[test]
+    #[serial]
+    fn test_repair_batch_data_range_accepts_valid_values() {
+        let mut args = base_args();
+        args.extend_from_slice(&[
+            "--repair-batch-data-start-l1-block",
+            "10",
+            "--repair-batch-data-end-l1-block",
+            "20",
+        ]);
+
+        let opts = Opts::try_parse_from(args).unwrap();
+        assert_eq!(opts.repair_batch_data_range().unwrap(), Some((10, 20)));
+    }
+
+    #[test]
+    #[serial]
+    fn test_repair_batch_data_range_requires_both_bounds() {
+        let mut args = base_args();
+        args.extend_from_slice(&["--repair-batch-data-start-l1-block", "10"]);
+
+        let opts = Opts::try_parse_from(args).unwrap();
+        assert_eq!(
+            opts.repair_batch_data_range().unwrap_err(),
+            "repair batch data end L1 block is required when the start block is set"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn test_repair_batch_data_range_rejects_inverted_bounds() {
+        let mut args = base_args();
+        args.extend_from_slice(&[
+            "--repair-batch-data-start-l1-block",
+            "20",
+            "--repair-batch-data-end-l1-block",
+            "10",
+        ]);
+
+        let opts = Opts::try_parse_from(args).unwrap();
+        assert_eq!(
+            opts.repair_batch_data_range().unwrap_err(),
+            "repair batch data start block 20 is greater than end block 10"
+        );
     }
 }

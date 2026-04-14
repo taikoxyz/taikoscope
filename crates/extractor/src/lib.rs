@@ -45,9 +45,9 @@ pub struct Extractor {
     l1_block_cache: Arc<DashMap<u64, u64>>,
 }
 
-/// Stream of batch proposed events with their L1 transaction hash
+/// Stream of batch proposed events with their L1 block number and transaction hash
 pub type BatchProposedStream =
-    Pin<Box<dyn Stream<Item = (chainio::BatchProposed, alloy::primitives::B256)> + Send>>;
+    Pin<Box<dyn Stream<Item = (BatchProposed, u64, alloy::primitives::B256)> + Send>>;
 /// Stream of batches proved events
 pub type BatchesProvedStream =
     Pin<Box<dyn Stream<Item = (chainio::BatchesProved, u64, alloy::primitives::B256)> + Send>>;
@@ -233,8 +233,8 @@ impl Extractor {
     }
 
     /// Subscribes to the `TaikoInbox` `BatchProposed` event and returns a stream of decoded events
-    /// along with the L1 transaction hash. This stream will attempt to automatically resubscribe
-    /// and continue yielding events.
+    /// along with the L1 block number and transaction hash. This stream will attempt to
+    /// automatically resubscribe and continue yielding events.
     pub async fn get_batch_proposed_stream(&self) -> Result<BatchProposedStream> {
         let (tx, rx) = mpsc::unbounded_channel();
         let provider = self.l1_provider.clone();
@@ -264,9 +264,12 @@ impl Extractor {
                         info!("Skipping removed Proposed log due to L1 reorg");
                         continue;
                     }
-                    match extractor.decode_batch_proposed_log(&log).await {
-                        Ok(Some(decoded)) => {
-                            if tx.send((decoded.batch, decoded.tx_hash)).is_err() {
+                    match log.log_decode::<BatchProposed>() {
+                        Ok(decoded) => {
+                            let batch = decoded.data().clone();
+                            let l1_block_number = log.block_number.unwrap_or(batch.info.proposedIn);
+                            let tx_hash = log.transaction_hash.unwrap_or_default();
+                            if tx.send((batch, l1_block_number, tx_hash)).is_err() {
                                 error!(
                                     "BatchProposed receiver dropped. Stopping Proposed event task."
                                 );

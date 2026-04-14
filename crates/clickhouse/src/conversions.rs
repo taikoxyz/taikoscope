@@ -13,18 +13,18 @@ use std::convert::TryFrom;
 // omit important values.
 
 // Conversion from BatchProposed to BatchRow
-impl TryFrom<(&BatchProposed, B256)> for BatchRow {
+impl TryFrom<(&ITaikoInbox::BatchProposed, u64, B256)> for BatchRow {
     type Error = Error;
 
-    fn try_from(input: (&BatchProposed, B256)) -> Result<Self, Self::Error> {
-        let (batch, tx_hash) = input;
+    fn try_from(input: (&ITaikoInbox::BatchProposed, u64, B256)) -> Result<Self, Self::Error> {
+        let (batch, l1_block_number, tx_hash) = input;
         let batch_size = u16::try_from(batch.info.blocks.len())?;
         let blob_count = u8::try_from(batch.info.blobHashes.len())?;
 
         let proposer_addr = AddressBytes::from(batch.meta.proposer);
 
         Ok(Self {
-            l1_block_number: batch.info.proposedIn,
+            l1_block_number,
             l1_tx_hash: HashBytes::from(tx_hash),
             batch_id: batch.meta.batchId,
             batch_size,
@@ -106,11 +106,11 @@ mod tests {
             meta: BatchMetadata { proposer: Address::repeat_byte(9), batchId: 42 },
         };
 
-        let row = BatchRow::try_from((&batch, B256::ZERO)).unwrap();
+        let row = BatchRow::try_from((&batch, 9, B256::ZERO)).unwrap();
         assert_eq!(
             row,
             BatchRow {
-                l1_block_number: 7,
+                l1_block_number: 9,
                 l1_tx_hash: HashBytes::from([0u8; 32]),
                 batch_id: 42,
                 batch_size: 2,

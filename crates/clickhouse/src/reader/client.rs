@@ -14,6 +14,7 @@ use tracing::{debug, error};
 use url::Url;
 
 use crate::{
+    BatchRow,
     models::{
         BatchBlobCountRow, BatchFeeComponentRow, BatchPostingTimeRow, BatchProveTimeRow,
         BatchVerifyTimeRow, BlockFeeComponentRow, BlockTransactionRow, FailedProposalRow,
@@ -69,13 +70,10 @@ impl ClickhouseReader {
     /// Anti-subquery that hides blocks later rolled back by a reorg.
     /// Use with `NOT IN (SELECT block_hash FROM ...)`
     fn reorg_filter(&self, table_alias: &str) -> String {
-        format!(
-            "{table_alias}.block_hash NOT IN ( \
-                SELECT block_hash \
-                FROM {db}.orphaned_l2_hashes\
-            )",
-            db = self.db_name,
-        )
+        // Disabled to avoid ClickHouse "Not-ready Set" errors from NOT IN.
+        // Keep a harmless predicate that still references the alias to avoid JOIN ambiguity.
+        // TODO: reintroduce reorg filtering via LEFT JOIN / NULL check to stay safe against reorgs.
+        format!("assumeNotNull({table_alias}.block_hash) = assumeNotNull({table_alias}.block_hash)")
     }
 
     /// Get last L2 head time
@@ -319,6 +317,33 @@ impl ClickhouseReader {
                 }
             })
             .collect())
+    }
+
+    /// Get batch rows ordered by recency for repair and consistency checks.
+    pub async fn get_recent_batch_rows(&self, limit: u64) -> Result<Vec<BatchRow>> {
+        let client = self.base.clone();
+        let sql = "SELECT l1_block_number, l1_tx_hash, batch_id, batch_size, last_l2_block_number, proposer_addr, blob_count, blob_total_bytes \
+             FROM ?.batches \
+             ORDER BY inserted_at DESC \
+             LIMIT ?";
+
+        let start = Instant::now();
+        let result: clickhouse::error::Result<Vec<BatchRow>> = client
+            .query(sql)
+            .bind(Identifier(&self.db_name))
+            .bind(limit)
+            .fetch_all::<BatchRow>()
+            .await;
+
+        let duration_ms = start.elapsed().as_millis();
+        match &result {
+            Ok(rows) => {
+                debug!(query = sql, duration_ms, rows = rows.len(), "ClickHouse query executed")
+            }
+            Err(e) => error!(query = sql, duration_ms, error = %e, "ClickHouse query failed"),
+        }
+
+        result.context("fetching recent batch rows failed")
     }
 
     /// Get all proved batch IDs from the `proved_batches` table
@@ -3025,54 +3050,55 @@ ORDER BY rb.batch_id ASC
     pub async fn get_l2_fees_by_sequencer(&self, range: TimeRange) -> Result<Vec<SequencerFeeRow>> {
         let query = format!(
             r#"
-    WITH valid_batches AS (
-        SELECT
-            b.batch_id,
-            b.proposer_addr AS seq_addr,
-            b.l1_block_number
-        FROM {db}.batches b
-        INNER JOIN {db}.l1_head_events l1 ON b.l1_block_number = l1.l1_block_number
-        WHERE l1.block_ts >= toUnixTimestamp(now64() - INTERVAL {interval})
-    ),
-    revenues AS (
+WITH valid_batches AS (
+    SELECT
+        b.batch_id,
+        b.proposer_addr AS seq_addr,
+        b.l1_block_number
+    FROM {db}.batches b
+    INNER JOIN {db}.l1_head_events l1 ON b.l1_block_number = l1.l1_block_number
+    WHERE l1.block_ts >= toUnixTimestamp(now64() - INTERVAL {interval})
+),
+valid_batch_blocks AS (
+    SELECT DISTINCT bb.batch_id, bb.l2_block_number
+    FROM {db}.batch_blocks bb
+    INNER JOIN valid_batches vb USING (batch_id)
+),
+revenues AS (
     SELECT
         h.sequencer AS seq_addr,
         sum(h.sum_priority_fee) AS priority_fee,
         sum(h.sum_base_fee)   AS base_fee
     FROM {db}.l2_head_events h
-    INNER JOIN (
-        SELECT DISTINCT batch_id, l2_block_number
-        FROM {db}.batch_blocks
-    ) bb ON bb.l2_block_number = h.l2_block_number
-    INNER JOIN valid_batches vb ON vb.batch_id = bb.batch_id
+    INNER JOIN valid_batch_blocks vbb ON vbb.l2_block_number = h.l2_block_number
     WHERE {filter}
     GROUP BY h.sequencer
 ),
-    costs AS (
-        SELECT
-            vb.seq_addr AS seq_addr,
-            sum(dc.cost) AS l1_data_cost,
-            sum(pc.cost) AS prove_cost
-        FROM valid_batches vb
-        LEFT JOIN {db}.l1_data_costs dc ON vb.batch_id = dc.batch_id AND vb.l1_block_number = dc.l1_block_number
-        LEFT JOIN {db}.prove_costs  pc ON vb.batch_id = pc.batch_id
-        GROUP BY vb.seq_addr
-    )
+costs AS (
     SELECT
-        CAST(
-          coalesce(
-            nullIf(r.seq_addr, unhex('0000000000000000000000000000000000000000')),
-            nullIf(c.seq_addr, unhex('0000000000000000000000000000000000000000'))
-          ) AS FixedString(20)
-        ) AS sequencer,
-        coalesce(r.priority_fee, toUInt128(0)) AS priority_fee,
-        coalesce(r.base_fee,     toUInt128(0)) AS base_fee,
-        coalesce(c.l1_data_cost, toUInt128(0)) AS l1_data_cost,
-        coalesce(c.prove_cost,   toUInt128(0)) AS prove_cost
-    FROM revenues r
-    FULL OUTER JOIN costs c ON r.seq_addr = c.seq_addr
-    ORDER BY priority_fee DESC
-    "#,
+        vb.seq_addr AS seq_addr,
+        sum(dc.cost) AS l1_data_cost,
+        sum(pc.cost) AS prove_cost
+    FROM valid_batches vb
+    LEFT JOIN {db}.l1_data_costs dc ON vb.batch_id = dc.batch_id AND vb.l1_block_number = dc.l1_block_number
+    LEFT JOIN {db}.prove_costs  pc ON vb.batch_id = pc.batch_id
+    GROUP BY vb.seq_addr
+)
+SELECT
+    CAST(
+      coalesce(
+        nullIf(r.seq_addr, unhex('0000000000000000000000000000000000000000')),
+        nullIf(c.seq_addr, unhex('0000000000000000000000000000000000000000'))
+      ) AS FixedString(20)
+    ) AS sequencer,
+    coalesce(r.priority_fee, toUInt128(0)) AS priority_fee,
+    coalesce(r.base_fee,     toUInt128(0)) AS base_fee,
+    coalesce(c.l1_data_cost, toUInt128(0)) AS l1_data_cost,
+    coalesce(c.prove_cost,   toUInt128(0)) AS prove_cost
+FROM revenues r
+FULL OUTER JOIN costs c ON r.seq_addr = c.seq_addr
+ORDER BY priority_fee DESC
+"#,
             db = self.db_name,
             interval = range.interval(),
             filter = self.reorg_filter("h"),
@@ -3138,21 +3164,33 @@ ORDER BY rb.batch_id ASC
     ) -> Result<Vec<SequencerDistributionRow>> {
         let query = format!(
             r#"
+WITH recent_batches AS (
+    SELECT
+        b.batch_id,
+        b.proposer_addr,
+        b.l1_block_number
+    FROM {db}.batches b
+    INNER JOIN {db}.l1_head_events l1 ON b.l1_block_number = l1.l1_block_number
+    WHERE l1.block_ts > {since}
+      AND l1.block_ts <= {until}
+),
+recent_batch_blocks AS (
+    SELECT DISTINCT bb.batch_id, bb.l2_block_number
+    FROM {db}.batch_blocks bb
+    INNER JOIN recent_batches rb USING (batch_id)
+)
 SELECT
-  b.proposer_addr AS sequencer,
+  rb.proposer_addr AS sequencer,
   countDistinct(h.l2_block_number) AS blocks,
-  countDistinct(b.batch_id)        AS batches,
+  countDistinct(rb.batch_id)       AS batches,
   toUInt64(min(h.block_ts))        AS min_ts,
   toUInt64(max(h.block_ts))        AS max_ts,
   sum(h.sum_tx)                    AS tx_sum
-FROM {db}.l2_head_events h
-INNER JOIN (SELECT DISTINCT batch_id, l2_block_number FROM {db}.batch_blocks) bb ON bb.l2_block_number = h.l2_block_number
-INNER JOIN {db}.batches b       ON b.batch_id = bb.batch_id
-INNER JOIN {db}.l1_head_events l1 ON l1.l1_block_number = b.l1_block_number
-WHERE l1.block_ts > {since}
-  AND l1.block_ts <= {until}
-  AND {filter}
-GROUP BY b.proposer_addr
+FROM recent_batches rb
+INNER JOIN recent_batch_blocks rbb USING (batch_id)
+INNER JOIN {db}.l2_head_events h ON rbb.l2_block_number = h.l2_block_number
+WHERE {filter}
+GROUP BY rb.proposer_addr
 ORDER BY blocks DESC
 "#,
             db = self.db_name,
@@ -3230,19 +3268,33 @@ ORDER BY blocks DESC
             inner.push_str(&format!(" AND sequencer = unhex('{}')", encode(addr)));
         }
 
-        // FIXED: Use the working SQL pattern with pre-calculated bucket
+        // Use bucketed aggregation and cap outliers at p99 per bucket.
         let query = format!(
-            "SELECT bucket_num AS l2_block_number, \
-                max(block_time) AS block_time, \
-                toUInt32(avg(sum_tx)) AS sum_tx \
-         FROM ( \
-            SELECT intDiv(l2_block_number, {bucket}) * {bucket} AS bucket_num, \
-                   block_time, \
-                   sum_tx \
-            FROM ({inner}) AS base \
-         ) AS sub \
-         GROUP BY bucket_num \
-         ORDER BY bucket_num ASC",
+            "WITH base AS ( \
+                SELECT intDiv(l2_block_number, {bucket}) * {bucket} AS bucket_num, \
+                       block_time, \
+                       sum_tx \
+                FROM ({inner}) AS base \
+             ), \
+             stats AS ( \
+                SELECT bucket_num, \
+                       quantileExact(0.99)(sum_tx) AS q99 \
+                FROM base \
+                GROUP BY bucket_num \
+             ) \
+             SELECT l2_block_number, \
+                    block_time, \
+                    toUInt32(if(isNaN(capped_avg), raw_avg, capped_avg)) AS sum_tx \
+             FROM ( \
+                SELECT b.bucket_num AS l2_block_number, \
+                       max(b.block_time) AS block_time, \
+                       avgIf(b.sum_tx, b.sum_tx < s.q99) AS capped_avg, \
+                       avg(b.sum_tx) AS raw_avg \
+                FROM base b \
+                INNER JOIN stats s USING (bucket_num) \
+                GROUP BY b.bucket_num \
+             ) AS agg \
+             ORDER BY l2_block_number ASC",
             bucket = bucket,
             inner = inner,
         );

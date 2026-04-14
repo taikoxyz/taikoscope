@@ -391,9 +391,18 @@ impl Driver {
                 }
                 maybe_batch = batch_stream.next() => {
                     match maybe_batch {
-                        Some((batch, l1_tx_hash)) => {
-                            info!(block_number = batch.last_block_number(), "Processing BatchProposed");
-                            let wrapper = messages::BatchProposedWrapper::from((batch, l1_tx_hash, false));
+                        Some((batch, l1_block_number, l1_tx_hash)) => {
+                            info!(
+                                l1_block_number,
+                                block_number = batch.last_block_number(),
+                                "Processing BatchProposed"
+                            );
+                            let wrapper = messages::BatchProposedWrapper::from((
+                                batch,
+                                l1_block_number,
+                                l1_tx_hash,
+                                false,
+                            ));
                             let event = TaikoEvent::BatchProposed(wrapper);
                             if let Err(e) = self.process_event(event).await {
                                 error!(err = %e, "Failed to process BatchProposed");

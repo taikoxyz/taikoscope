@@ -26,6 +26,7 @@ use crate::{
 
 /// Embedded migrations directory
 static MIGRATIONS_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/migrations");
+const BATCH_DELETE_CHUNK_SIZE: usize = 500;
 
 /// Split a SQL script into individual statements using sqlparser-rs.
 ///
@@ -156,6 +157,13 @@ fn split_statements_manually(sql: &str) -> Vec<String> {
     statements
 }
 
+fn build_batch_id_delete_query(db_name: &str, table_name: &str, batch_ids: &[u64]) -> String {
+    let ids = batch_ids.iter().map(u64::to_string).collect::<Vec<_>>().join(", ");
+    format!(
+        "ALTER TABLE {db_name}.{table_name} DELETE WHERE batch_id IN ({ids}) SETTINGS mutations_sync = 2"
+    )
+}
+
 /// Simple struct for version query results
 #[derive(Debug, clickhouse::Row, serde::Deserialize)]
 struct VersionRow {
@@ -220,6 +228,34 @@ impl ClickhouseWriter {
             .execute()
             .await
             .wrap_err_with(|| format!("Failed to drop {} view", view_name))
+    }
+
+    async fn execute_ddl(&self, query: &str) -> Result<()> {
+        self.base
+            .query(query)
+            .execute()
+            .await
+            .wrap_err_with(|| format!("Failed to execute DDL: {query}"))
+    }
+
+    /// Delete `BatchProposed`-derived rows for the given batch IDs.
+    pub async fn delete_batch_proposed_data(&self, batch_ids: &[u64]) -> Result<()> {
+        if batch_ids.is_empty() {
+            return Ok(());
+        }
+
+        let mut unique_batch_ids = batch_ids.to_vec();
+        unique_batch_ids.sort_unstable();
+        unique_batch_ids.dedup();
+
+        for chunk in unique_batch_ids.chunks(BATCH_DELETE_CHUNK_SIZE) {
+            for table_name in ["batch_blocks", "l1_data_costs", "batches"] {
+                let query = build_batch_id_delete_query(&self.db_name, table_name, chunk);
+                self.execute_ddl(&query).await?;
+            }
+        }
+
+        Ok(())
     }
 
     /// Initialize database and optionally reset
@@ -501,11 +537,12 @@ impl ClickhouseWriter {
     /// Insert a batch and its block mappings
     pub async fn insert_batch(
         &self,
-        batch: &chainio::BatchProposed,
+        batch: &chainio::ITaikoInbox::BatchProposed,
+        l1_block_number: u64,
         l1_tx_hash: B256,
     ) -> Result<()> {
         let client = self.base.clone();
-        let batch_row = BatchRow::try_from((batch, l1_tx_hash))?;
+        let batch_row = BatchRow::try_from((batch, l1_block_number, l1_tx_hash))?;
 
         // Insert the batch
         let mut insert = client.insert(&format!("{}.batches", self.db_name))?;
@@ -608,6 +645,15 @@ mod tests {
         ForcedInclusionProcessed, Transition,
     };
     use clickhouse::test::{self, Mock, handlers};
+
+    #[test]
+    fn build_batch_id_delete_query_formats_expected_sql() {
+        let query = build_batch_id_delete_query("db", "batches", &[7, 9, 11]);
+        assert_eq!(
+            query,
+            "ALTER TABLE db.batches DELETE WHERE batch_id IN (7, 9, 11) SETTINGS mutations_sync = 2"
+        );
+    }
 
     #[tokio::test]
     async fn create_table_generates_correct_query() {
@@ -738,11 +784,11 @@ mod tests {
             meta: BatchMetadata { proposer: Address::repeat_byte(2), batchId: 7 },
         };
 
-        writer.insert_batch(&batch, B256::ZERO).await.unwrap();
+        writer.insert_batch(&batch, 11, B256::ZERO).await.unwrap();
 
         let rows: Vec<BatchRow> = ctl.collect().await;
         let expected = BatchRow {
-            l1_block_number: 2,
+            l1_block_number: 11,
             l1_tx_hash: HashBytes::from([0u8; 32]),
             batch_id: 7,
             batch_size: 1,
@@ -875,6 +921,32 @@ mod tests {
         assert_eq!(rows[1].l2_block_number, 101);
     }
 
+    #[tokio::test]
+    async fn delete_batch_proposed_data_issues_expected_mutations() {
+        let mock = Mock::new();
+        let batch_blocks = mock.add(handlers::record_ddl());
+        let l1_data_costs = mock.add(handlers::record_ddl());
+        let batches = mock.add(handlers::record_ddl());
+
+        let url = Url::parse(mock.url()).unwrap();
+        let writer = ClickhouseWriter::new(url, "db".to_owned(), "user".into(), "pass".into());
+
+        writer.delete_batch_proposed_data(&[9, 7, 9]).await.unwrap();
+
+        assert_eq!(
+            batch_blocks.query().await,
+            "ALTER TABLE db.batch_blocks DELETE WHERE batch_id IN (7, 9) SETTINGS mutations_sync = 2"
+        );
+        assert_eq!(
+            l1_data_costs.query().await,
+            "ALTER TABLE db.l1_data_costs DELETE WHERE batch_id IN (7, 9) SETTINGS mutations_sync = 2"
+        );
+        assert_eq!(
+            batches.query().await,
+            "ALTER TABLE db.batches DELETE WHERE batch_id IN (7, 9) SETTINGS mutations_sync = 2"
+        );
+    }
+
     #[test]
     fn parse_sql_handles_semicolons_in_strings() {
         let sql = "CREATE TABLE t(a String DEFAULT ';');\nCREATE TABLE t2(b String);";
@@ -912,7 +984,7 @@ mod tests {
             meta: BatchMetadata { proposer: Address::repeat_byte(2), batchId: 1 },
         };
 
-        let result = writer.insert_batch(&batch, B256::ZERO).await;
+        let result = writer.insert_batch(&batch, 1, B256::ZERO).await;
         assert!(result.is_err());
     }
 
