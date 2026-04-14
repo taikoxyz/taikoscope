@@ -20,6 +20,15 @@ async fn main() -> eyre::Result<()> {
     }
 
     let opts = Opts::parse();
+    let repair_lookback_batches = opts.repair_batch_data_lookback_batches;
+    let use_auto_repair = opts.repair_batch_data_start_l1_block.is_none() &&
+        opts.repair_batch_data_end_l1_block.is_none();
+    let repair_range = opts.repair_batch_data_range().map_err(|message| eyre::eyre!(message))?;
+
+    let mut opts = opts;
+    if repair_range.is_some() {
+        opts.instatus.monitors_enabled = false;
+    }
 
     tracing_subscriber::fmt()
         .with_file(true)
@@ -33,6 +42,21 @@ async fn main() -> eyre::Result<()> {
     info!("Starting Taikoscope");
 
     let driver = Driver::new(opts).await?;
+
+    if let Some((start_block, end_block)) = repair_range {
+        info!(
+            start_block = start_block,
+            end_block = end_block,
+            "Running one-shot BatchProposed data repair"
+        );
+        driver.repair_batch_proposed_data_range(start_block, end_block).await?;
+        info!("BatchProposed data repair completed");
+        return Ok(());
+    }
+
+    if use_auto_repair {
+        driver.auto_repair_batch_proposed_data(repair_lookback_batches).await?;
+    }
 
     // Create broadcast channel for graceful shutdown communication
     let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
