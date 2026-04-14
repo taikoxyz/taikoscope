@@ -537,7 +537,7 @@ impl ClickhouseWriter {
     /// Insert a batch and its block mappings
     pub async fn insert_batch(
         &self,
-        batch: &chainio::ITaikoInbox::BatchProposed,
+        batch: &chainio::BatchProposed,
         l1_block_number: u64,
         l1_tx_hash: B256,
     ) -> Result<()> {

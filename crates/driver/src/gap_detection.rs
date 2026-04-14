@@ -7,10 +7,7 @@ use alloy_primitives::{Address, B256};
 use clickhouse::{AddressBytes, ClickhouseReader, ClickhouseWriter, HashBytes, L2HeadEvent};
 use extractor::Extractor;
 use eyre::{Context, Result};
-use messages::{
-    BatchProposedWrapper, BatchesProvedWrapper, BatchesVerifiedWrapper,
-    ForcedInclusionProcessedWrapper,
-};
+use messages::{BatchProposedWrapper, BatchesProvedWrapper, ForcedInclusionProcessedWrapper};
 use tracing::{error, info, warn};
 
 use crate::event_handler::{EventHandler, GapDetectionState};
@@ -76,8 +73,6 @@ async fn collect_batch_proposed_wrappers_for_l1_range(
     start_block: u64,
     end_block: u64,
 ) -> Result<Vec<BatchProposedWrapper>> {
-    use chainio::ITaikoInbox::BatchProposed;
-
     let mut wrappers = Vec::new();
 
     for block_number in start_block..=end_block {
@@ -105,11 +100,12 @@ async fn collect_batch_proposed_wrappers_for_l1_range(
                     continue;
                 }
 
-                if let Ok(decoded) = log.log_decode::<BatchProposed>() {
+                if let Some(decoded) = extractor.decode_batch_proposed_log(log).await? {
+                    let l1_block_number = decoded.batch.info.proposedIn;
                     wrappers.push(BatchProposedWrapper::from((
-                        decoded.data().clone(),
-                        log.block_number.unwrap_or(block_number),
-                        tx_hash,
+                        decoded.batch,
+                        l1_block_number,
+                        decoded.tx_hash,
                         false,
                     )));
                 }
@@ -828,14 +824,15 @@ pub async fn process_l1_block_taiko_events(
                     if log.address() == inbox_address {
                         if let Some(decoded) = extractor.decode_batch_proposed_log(log).await? {
                             let tx_hash = decoded.tx_hash;
+                            let l1_block_number = decoded.batch.info.proposedIn;
                             info!(
                                 block_number = block_number,
                                 tx_hash = %tx_hash,
                                 "Found Proposed event in backfill"
                             );
                             let wrapper = BatchProposedWrapper::from((
-                                decoded.data().clone(),
-                                block_number,
+                                decoded.batch,
+                                l1_block_number,
                                 tx_hash,
                                 false, // not reorged
                             ));
@@ -1169,88 +1166,6 @@ pub fn select_still_missing(original_gaps: Vec<u64>, current_gaps: Vec<u64>) -> 
 /// Pure helper function to calculate lookback start block
 pub fn calculate_lookback_start(latest_db: u64, lookback_blocks: u64) -> u64 {
     std::cmp::max(1, latest_db.saturating_sub(lookback_blocks) + 1)
-}
-
-/// Decoded Taiko event from a log
-#[derive(Debug, Clone)]
-#[allow(clippy::large_enum_variant)]
-pub enum DecodedEvent {
-    BatchProposed(messages::BatchProposedWrapper),
-    BatchesProved(messages::BatchesProvedWrapper),
-    BatchesVerified(messages::BatchesVerifiedWrapper),
-    ForcedInclusionProcessed(messages::ForcedInclusionProcessedWrapper),
-}
-
-/// Pure helper function to decode a Taiko event from a log
-/// This enables unit testing of event decoding without network dependencies
-pub fn decode_taiko_event_from_log(
-    log: &alloy_rpc_types_eth::Log,
-    inbox_address: alloy_primitives::Address,
-    taiko_wrapper_address: alloy_primitives::Address,
-    l1_block_number: u64,
-    l1_tx_hash: alloy_primitives::B256,
-) -> Option<DecodedEvent> {
-    use chainio::{
-        BatchesVerified,
-        ITaikoInbox::{BatchProposed, BatchesProved, BatchesVerified as InboxBatchesVerified},
-        taiko::wrapper::ITaikoWrapper::ForcedInclusionProcessed,
-    };
-
-    // Skip removed logs
-    if log.removed {
-        return None;
-    }
-
-    // Process events based on contract address
-    if log.address() == inbox_address {
-        // Try to decode BatchProposed
-        if let Ok(decoded) = log.log_decode::<BatchProposed>() {
-            let wrapper = messages::BatchProposedWrapper::from((
-                decoded.data().clone(),
-                l1_block_number,
-                l1_tx_hash,
-                false, // not reorged
-            ));
-            return Some(DecodedEvent::BatchProposed(wrapper));
-        }
-
-        // Try to decode BatchesProved
-        if let Ok(decoded) = log.log_decode::<BatchesProved>() {
-            let wrapper = messages::BatchesProvedWrapper::from((
-                decoded.data().clone(),
-                l1_block_number,
-                l1_tx_hash,
-                false, // not reorged
-            ));
-            return Some(DecodedEvent::BatchesProved(wrapper));
-        }
-
-        // Try to decode BatchesVerified
-        if let Ok(decoded) = log.log_decode::<InboxBatchesVerified>() {
-            let data = decoded.data();
-            let mut block_hash = [0u8; 32];
-            block_hash.copy_from_slice(data.blockHash.as_slice());
-            let verified = BatchesVerified { batch_id: data.batchId, block_hash };
-            let wrapper = messages::BatchesVerifiedWrapper::from((
-                verified,
-                l1_block_number,
-                l1_tx_hash,
-                false, // not reorged
-            ));
-            return Some(DecodedEvent::BatchesVerified(wrapper));
-        }
-    } else if log.address() == taiko_wrapper_address {
-        // Try to decode ForcedInclusionProcessed
-        if let Ok(decoded) = log.log_decode::<ForcedInclusionProcessed>() {
-            let wrapper = messages::ForcedInclusionProcessedWrapper::from((
-                decoded.data().clone(),
-                false, // not reorged
-            ));
-            return Some(DecodedEvent::ForcedInclusionProcessed(wrapper));
-        }
-    }
-
-    None
 }
 
 #[cfg(test)]

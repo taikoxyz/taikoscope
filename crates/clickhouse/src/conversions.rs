@@ -13,10 +13,10 @@ use std::convert::TryFrom;
 // omit important values.
 
 // Conversion from BatchProposed to BatchRow
-impl TryFrom<(&ITaikoInbox::BatchProposed, u64, B256)> for BatchRow {
+impl TryFrom<(&BatchProposed, u64, B256)> for BatchRow {
     type Error = Error;
 
-    fn try_from(input: (&ITaikoInbox::BatchProposed, u64, B256)) -> Result<Self, Self::Error> {
+    fn try_from(input: (&BatchProposed, u64, B256)) -> Result<Self, Self::Error> {
         let (batch, l1_block_number, tx_hash) = input;
         let batch_size = u16::try_from(batch.info.blocks.len())?;
         let blob_count = u8::try_from(batch.info.blobHashes.len())?;

@@ -47,7 +47,7 @@ pub struct Extractor {
 
 /// Stream of batch proposed events with their L1 block number and transaction hash
 pub type BatchProposedStream =
-    Pin<Box<dyn Stream<Item = (BatchProposed, u64, alloy::primitives::B256)> + Send>>;
+    Pin<Box<dyn Stream<Item = (chainio::BatchProposed, u64, alloy::primitives::B256)> + Send>>;
 /// Stream of batches proved events
 pub type BatchesProvedStream =
     Pin<Box<dyn Stream<Item = (chainio::BatchesProved, u64, alloy::primitives::B256)> + Send>>;
@@ -264,12 +264,10 @@ impl Extractor {
                         info!("Skipping removed Proposed log due to L1 reorg");
                         continue;
                     }
-                    match log.log_decode::<BatchProposed>() {
-                        Ok(decoded) => {
-                            let batch = decoded.data().clone();
-                            let l1_block_number = log.block_number.unwrap_or(batch.info.proposedIn);
-                            let tx_hash = log.transaction_hash.unwrap_or_default();
-                            if tx.send((batch, l1_block_number, tx_hash)).is_err() {
+                    match extractor.decode_batch_proposed_log(&log).await {
+                        Ok(Some(decoded)) => {
+                            let l1_block_number = decoded.batch.info.proposedIn;
+                            if tx.send((decoded.batch, l1_block_number, decoded.tx_hash)).is_err() {
                                 error!(
                                     "BatchProposed receiver dropped. Stopping Proposed event task."
                                 );
