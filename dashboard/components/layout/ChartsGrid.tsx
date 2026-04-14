@@ -47,7 +47,6 @@ interface ChartsGridProps {
   chartsData: {
     sequencerDistribution: PieChartDataItem[];
     secondsToProveData: TimeSeriesData[];
-    secondsToVerifyData: TimeSeriesData[];
     l2GasUsedData: TimeSeriesData[];
     blockTxData: BlockTransaction[];
     batchBlobCounts: BatchBlobCount[];
@@ -107,17 +106,6 @@ export const ChartsGrid: React.FC<ChartsGridProps> = ({
           key={timeRange}
           data={chartsData.secondsToProveData}
           lineColor={chartSeries.primary}
-        />
-      </ChartCard>
-      <ChartCard
-        title="Avg Verify Time"
-        onMore={() => onOpenTable('verify-times', timeRange)}
-        loading={isLoading}
-      >
-        <BatchProcessChart
-          key={timeRange}
-          data={chartsData.secondsToVerifyData}
-          lineColor={chartSeries.accent4}
         />
       </ChartCard>
       <ChartCard

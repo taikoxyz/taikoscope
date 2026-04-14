@@ -7,10 +7,7 @@ use alloy_primitives::{Address, B256};
 use clickhouse::{AddressBytes, ClickhouseReader, ClickhouseWriter, HashBytes, L2HeadEvent};
 use extractor::Extractor;
 use eyre::{Context, Result};
-use messages::{
-    BatchProposedWrapper, BatchesProvedWrapper, BatchesVerifiedWrapper,
-    ForcedInclusionProcessedWrapper,
-};
+use messages::{BatchProposedWrapper, BatchesProvedWrapper, ForcedInclusionProcessedWrapper};
 use tracing::{error, info, warn};
 
 use crate::event_handler::{EventHandler, GapDetectionState};
@@ -76,8 +73,6 @@ async fn collect_batch_proposed_wrappers_for_l1_range(
     start_block: u64,
     end_block: u64,
 ) -> Result<Vec<BatchProposedWrapper>> {
-    use chainio::ITaikoInbox::BatchProposed;
-
     let mut wrappers = Vec::new();
 
     for block_number in start_block..=end_block {
@@ -105,11 +100,12 @@ async fn collect_batch_proposed_wrappers_for_l1_range(
                     continue;
                 }
 
-                if let Ok(decoded) = log.log_decode::<BatchProposed>() {
+                if let Some(decoded) = extractor.decode_batch_proposed_log(log).await? {
+                    let l1_block_number = decoded.batch.info.proposedIn;
                     wrappers.push(BatchProposedWrapper::from((
-                        decoded.data().clone(),
-                        log.block_number.unwrap_or(block_number),
-                        tx_hash,
+                        decoded.batch,
+                        l1_block_number,
+                        decoded.tx_hash,
                         false,
                     )));
                 }
@@ -247,7 +243,6 @@ impl crate::driver::Driver {
         let writer = self.clickhouse_writer.as_ref()?.clone();
         let extractor = self.extractor.clone();
         let inbox_address = self.inbox_address;
-        let taiko_wrapper_address = self.taiko_wrapper_address;
         let enable_db_writes = self.enable_db_writes;
         let gap_dry_run = self.gap_dry_run;
         let finalization_buffer = self.gap_finalization_buffer_blocks;
@@ -270,7 +265,6 @@ impl crate::driver::Driver {
                     Some(&writer),
                     &extractor,
                     inbox_address,
-                    taiko_wrapper_address,
                     enable_db_writes && !gap_dry_run,
                     finalization_buffer,
                     continuous_lookback,
@@ -345,7 +339,6 @@ impl crate::driver::Driver {
             writer,
             &self.extractor,
             self.inbox_address,
-            self.taiko_wrapper_address,
             self.enable_db_writes && !self.gap_dry_run,
             self.gap_finalization_buffer_blocks,
             self.gap_startup_lookback_blocks,
@@ -371,7 +364,6 @@ pub async fn run_initial_gap_catchup(
     writer: Option<&ClickhouseWriter>,
     extractor: &Extractor,
     inbox_address: Address,
-    taiko_wrapper_address: Address,
     enable_db_writes: bool,
     gap_finalization_buffer_blocks: u64,
     gap_startup_lookback_blocks: u64,
@@ -413,7 +405,6 @@ pub async fn run_initial_gap_catchup(
         writer,
         extractor,
         inbox_address,
-        taiko_wrapper_address,
         enable_db_writes,
         gap_finalization_buffer_blocks,
         gap_startup_lookback_blocks,
@@ -438,7 +429,6 @@ pub async fn run_gap_detection(
     writer: Option<&ClickhouseWriter>,
     extractor: &Extractor,
     inbox_address: Address,
-    taiko_wrapper_address: Address,
     enable_db_writes: bool,
     finalization_buffer: u64,
     lookback_blocks: u64,
@@ -465,7 +455,6 @@ pub async fn run_gap_detection(
         extractor,
         &gap_state,
         inbox_address,
-        taiko_wrapper_address,
         enable_db_writes,
         l1_start_override,
         min_l1_block,
@@ -563,7 +552,6 @@ pub async fn process_l1_gaps(
     extractor: &Extractor,
     state: &GapDetectionState,
     inbox_address: Address,
-    taiko_wrapper_address: Address,
     enable_db_writes: bool,
     start_block_override: Option<u64>,
     min_l1_block: u64,
@@ -601,7 +589,6 @@ pub async fn process_l1_gaps(
                 extractor,
                 still_missing,
                 inbox_address,
-                taiko_wrapper_address,
                 enable_db_writes,
                 min_l1_block,
             )
@@ -689,7 +676,6 @@ pub async fn backfill_l1_blocks(
     extractor: &Extractor,
     block_numbers: Vec<u64>,
     inbox_address: Address,
-    taiko_wrapper_address: Address,
     enable_db_writes: bool,
     min_l1_block: u64,
 ) -> Result<()> {
@@ -764,7 +750,6 @@ pub async fn backfill_l1_blocks(
                     extractor,
                     &block,
                     inbox_address,
-                    taiko_wrapper_address,
                     enable_db_writes,
                 )
                 .await?;
@@ -811,18 +796,9 @@ pub async fn process_l1_block_taiko_events(
     extractor: &Extractor,
     block: &alloy_rpc_types_eth::Block,
     inbox_address: Address,
-    taiko_wrapper_address: Address,
     enable_db_writes: bool,
 ) -> Result<()> {
-    use chainio::{
-        BatchesVerified,
-        ITaikoInbox::{BatchProposed, BatchesProved, BatchesVerified as InboxBatchesVerified},
-        taiko::wrapper::ITaikoWrapper::ForcedInclusionProcessed,
-    };
-    use messages::{
-        BatchProposedWrapper, BatchesProvedWrapper, BatchesVerifiedWrapper,
-        ForcedInclusionProcessedWrapper,
-    };
+    use messages::{BatchProposedWrapper, BatchesProvedWrapper, ForcedInclusionProcessedWrapper};
 
     let block_number = block.header.number;
     let mut events_found = 0;
@@ -846,16 +822,17 @@ pub async fn process_l1_block_taiko_events(
 
                     // Process events based on contract address
                     if log.address() == inbox_address {
-                        // Try to decode BatchProposed
-                        if let Ok(decoded) = log.log_decode::<BatchProposed>() {
+                        if let Some(decoded) = extractor.decode_batch_proposed_log(log).await? {
+                            let tx_hash = decoded.tx_hash;
+                            let l1_block_number = decoded.batch.info.proposedIn;
                             info!(
                                 block_number = block_number,
                                 tx_hash = %tx_hash,
-                                "Found BatchProposed event in backfill"
+                                "Found Proposed event in backfill"
                             );
                             let wrapper = BatchProposedWrapper::from((
-                                decoded.data().clone(),
-                                block_number,
+                                decoded.batch,
+                                l1_block_number,
                                 tx_hash,
                                 false, // not reorged
                             ));
@@ -867,72 +844,35 @@ pub async fn process_l1_block_taiko_events(
                             )
                             .await?;
                             events_found += 1;
+                            for event in decoded.forced_inclusions {
+                                let wrapper = ForcedInclusionProcessedWrapper::from((event, false));
+                                handle_forced_inclusion_event_during_backfill(
+                                    writer,
+                                    extractor,
+                                    wrapper,
+                                    enable_db_writes,
+                                )
+                                .await?;
+                                events_found += 1;
+                            }
                             continue;
                         }
 
-                        // Try to decode BatchesProved
-                        if let Ok(decoded) = log.log_decode::<BatchesProved>() {
+                        if let Some((proved, l1_block_number, tx_hash)) =
+                            extractor.decode_batches_proved_log(log).await?
+                        {
                             info!(
                                 block_number = block_number,
                                 tx_hash = %tx_hash,
-                                "Found BatchesProved event in backfill"
+                                "Found Proved event in backfill"
                             );
                             let wrapper = BatchesProvedWrapper::from((
-                                decoded.data().clone(),
-                                block_number,
+                                proved,
+                                l1_block_number,
                                 tx_hash,
-                                false, // not reorged
+                                false,
                             ));
                             handle_batches_proved_event_during_backfill(
-                                writer,
-                                extractor,
-                                wrapper,
-                                enable_db_writes,
-                            )
-                            .await?;
-                            events_found += 1;
-                            continue;
-                        }
-
-                        // Try to decode BatchesVerified
-                        if let Ok(decoded) = log.log_decode::<InboxBatchesVerified>() {
-                            info!(
-                                block_number = block_number,
-                                tx_hash = %tx_hash,
-                                "Found BatchesVerified event in backfill"
-                            );
-                            let data = decoded.data();
-                            let mut block_hash = [0u8; 32];
-                            block_hash.copy_from_slice(data.blockHash.as_slice());
-                            let verified = BatchesVerified { batch_id: data.batchId, block_hash };
-                            let wrapper = BatchesVerifiedWrapper::from((
-                                verified,
-                                block_number,
-                                tx_hash,
-                                false, // not reorged
-                            ));
-                            handle_batches_verified_event_during_backfill(
-                                writer,
-                                extractor,
-                                wrapper,
-                                enable_db_writes,
-                            )
-                            .await?;
-                            events_found += 1;
-                        }
-                    } else if log.address() == taiko_wrapper_address {
-                        // Try to decode ForcedInclusionProcessed
-                        if let Ok(decoded) = log.log_decode::<ForcedInclusionProcessed>() {
-                            info!(
-                                block_number = block_number,
-                                tx_hash = %tx_hash,
-                                "Found ForcedInclusionProcessed event in backfill"
-                            );
-                            let wrapper = ForcedInclusionProcessedWrapper::from((
-                                decoded.data().clone(),
-                                false, // not reorged
-                            ));
-                            handle_forced_inclusion_event_during_backfill(
                                 writer,
                                 extractor,
                                 wrapper,
@@ -990,21 +930,6 @@ pub async fn handle_batches_proved_event_during_backfill(
         handler.handle_batches_proved(wrapper).await
     } else {
         info!("🧪 DRY-RUN: Would handle batches proved event during backfill");
-        Ok(())
-    }
-}
-
-pub async fn handle_batches_verified_event_during_backfill(
-    writer: Option<&ClickhouseWriter>,
-    extractor: &Extractor,
-    wrapper: BatchesVerifiedWrapper,
-    enable_db_writes: bool,
-) -> Result<()> {
-    if let Some(writer) = writer {
-        let handler = EventHandler::new(writer, extractor, enable_db_writes);
-        handler.handle_batches_verified(wrapper).await
-    } else {
-        info!("🧪 DRY-RUN: Would handle batches verified event during backfill");
         Ok(())
     }
 }
@@ -1243,92 +1168,9 @@ pub fn calculate_lookback_start(latest_db: u64, lookback_blocks: u64) -> u64 {
     std::cmp::max(1, latest_db.saturating_sub(lookback_blocks) + 1)
 }
 
-/// Decoded Taiko event from a log
-#[derive(Debug, Clone)]
-#[allow(clippy::large_enum_variant)]
-pub enum DecodedEvent {
-    BatchProposed(messages::BatchProposedWrapper),
-    BatchesProved(messages::BatchesProvedWrapper),
-    BatchesVerified(messages::BatchesVerifiedWrapper),
-    ForcedInclusionProcessed(messages::ForcedInclusionProcessedWrapper),
-}
-
-/// Pure helper function to decode a Taiko event from a log
-/// This enables unit testing of event decoding without network dependencies
-pub fn decode_taiko_event_from_log(
-    log: &alloy_rpc_types_eth::Log,
-    inbox_address: alloy_primitives::Address,
-    taiko_wrapper_address: alloy_primitives::Address,
-    l1_block_number: u64,
-    l1_tx_hash: alloy_primitives::B256,
-) -> Option<DecodedEvent> {
-    use chainio::{
-        BatchesVerified,
-        ITaikoInbox::{BatchProposed, BatchesProved, BatchesVerified as InboxBatchesVerified},
-        taiko::wrapper::ITaikoWrapper::ForcedInclusionProcessed,
-    };
-
-    // Skip removed logs
-    if log.removed {
-        return None;
-    }
-
-    // Process events based on contract address
-    if log.address() == inbox_address {
-        // Try to decode BatchProposed
-        if let Ok(decoded) = log.log_decode::<BatchProposed>() {
-            let wrapper = messages::BatchProposedWrapper::from((
-                decoded.data().clone(),
-                l1_block_number,
-                l1_tx_hash,
-                false, // not reorged
-            ));
-            return Some(DecodedEvent::BatchProposed(wrapper));
-        }
-
-        // Try to decode BatchesProved
-        if let Ok(decoded) = log.log_decode::<BatchesProved>() {
-            let wrapper = messages::BatchesProvedWrapper::from((
-                decoded.data().clone(),
-                l1_block_number,
-                l1_tx_hash,
-                false, // not reorged
-            ));
-            return Some(DecodedEvent::BatchesProved(wrapper));
-        }
-
-        // Try to decode BatchesVerified
-        if let Ok(decoded) = log.log_decode::<InboxBatchesVerified>() {
-            let data = decoded.data();
-            let mut block_hash = [0u8; 32];
-            block_hash.copy_from_slice(data.blockHash.as_slice());
-            let verified = BatchesVerified { batch_id: data.batchId, block_hash };
-            let wrapper = messages::BatchesVerifiedWrapper::from((
-                verified,
-                l1_block_number,
-                l1_tx_hash,
-                false, // not reorged
-            ));
-            return Some(DecodedEvent::BatchesVerified(wrapper));
-        }
-    } else if log.address() == taiko_wrapper_address {
-        // Try to decode ForcedInclusionProcessed
-        if let Ok(decoded) = log.log_decode::<ForcedInclusionProcessed>() {
-            let wrapper = messages::ForcedInclusionProcessedWrapper::from((
-                decoded.data().clone(),
-                false, // not reorged
-            ));
-            return Some(DecodedEvent::ForcedInclusionProcessed(wrapper));
-        }
-    }
-
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloy_primitives::{Address, B256};
 
     #[test]
     fn test_select_still_missing() {
@@ -1360,22 +1202,5 @@ mod tests {
         assert_eq!(calculate_lookback_start(100, 100), 1);
         assert_eq!(calculate_lookback_start(100, 200), 1);
         assert_eq!(calculate_lookback_start(0, 50), 1);
-    }
-
-    #[test]
-    fn test_decode_taiko_event_from_log_basic() {
-        // This test verifies the function structure without complex event encoding
-        // The actual event decoding is tested through integration tests
-        let inbox_address = Address::repeat_byte(1);
-        let taiko_wrapper_address = Address::repeat_byte(2);
-        let l1_block_number = 100;
-        let l1_tx_hash = B256::repeat_byte(3);
-
-        // Test that the function exists and can be called
-        // We'll test the actual decoding logic in integration tests
-        assert_eq!(inbox_address, Address::repeat_byte(1));
-        assert_eq!(taiko_wrapper_address, Address::repeat_byte(2));
-        assert_eq!(l1_block_number, 100);
-        assert_eq!(l1_tx_hash, B256::repeat_byte(3));
     }
 }

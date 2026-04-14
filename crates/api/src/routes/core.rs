@@ -246,7 +246,6 @@ pub async fn verify_times(
 
     match query_mode {
         QueryMode::Aggregated => {
-            // Aggregated mode - use time range parameters
             validate_time_range(&params.common.time_range)?;
             let has_time_range = has_time_range_params(&params.common.time_range);
             validate_range_exclusivity(has_time_range, false)?;
@@ -261,7 +260,6 @@ pub async fn verify_times(
             Ok(Json(VerifyTimesResponse { batches }))
         }
         QueryMode::Regular { limit } => {
-            // Regular paginated mode
             validate_time_range(&params.common.time_range)?;
             let has_time_range = has_time_range_params(&params.common.time_range);
             let has_slot_range = params.starting_after.is_some() || params.ending_before.is_some();

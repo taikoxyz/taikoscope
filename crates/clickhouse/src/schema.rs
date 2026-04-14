@@ -21,11 +21,9 @@ pub const TABLES: &[&str] = &[
     "proved_batches",
     "l2_reorgs",
     "forced_inclusion_processed",
-    "verified_batches",
     "slashing_events",
     "l1_data_costs",
     "prove_costs",
-    "verify_costs",
     "orphaned_l2_hashes",
     "schema_migrations",
 ];
@@ -33,13 +31,10 @@ pub const TABLES: &[&str] = &[
 /// Names of all materialized views
 pub const VIEWS: &[&str] = &[
     "batch_prove_times_mv",
-    "batch_verify_times_mv",
     "hourly_avg_prove_times_mv",
-    "hourly_avg_verify_times_mv",
     "hourly_l2_metrics_mv",
     "hourly_batch_metrics_mv",
     "daily_avg_prove_times_mv",
-    "daily_avg_verify_times_mv",
     "daily_l2_metrics_mv",
     "daily_batch_metrics_mv",
 ];
@@ -122,14 +117,6 @@ pub const TABLE_SCHEMAS: &[TableSchema] = &[
         order_by: "inserted_at",
     },
     TableSchema {
-        name: "verified_batches",
-        columns: "l1_block_number UInt64,
-                 batch_id UInt64,
-                 block_hash FixedString(32),
-                 inserted_at DateTime64(3) DEFAULT now64()",
-        order_by: "l1_block_number, batch_id",
-    },
-    TableSchema {
         name: "slashing_events",
         columns: "l1_block_number UInt64,
                  validator_addr FixedString(20),
@@ -146,14 +133,6 @@ pub const TABLE_SCHEMAS: &[TableSchema] = &[
     },
     TableSchema {
         name: "prove_costs",
-        columns: "l1_block_number UInt64,
-                 batch_id UInt64,
-                 cost UInt128,
-                 inserted_at DateTime64(3) DEFAULT now64()",
-        order_by: "l1_block_number, batch_id",
-    },
-    TableSchema {
-        name: "verify_costs",
         columns: "l1_block_number UInt64,
                  batch_id UInt64,
                  cost UInt128,

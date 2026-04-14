@@ -16,8 +16,6 @@ import {
   fetchBatchPostingTimes,
   fetchProveTimes,
   fetchProveTimesAggregated,
-  fetchVerifyTimes,
-  fetchVerifyTimesAggregated,
   fetchAllBlockTransactions,
   fetchBlockTransactionsAggregated,
   fetchL2GasUsed,
@@ -350,26 +348,6 @@ export const TABLE_CONFIGS: Record<string, TableConfig> = {
         value: `${Math.round(Number(d.value) / 60)} minutes`,
       })),
     urlKey: 'prove-times',
-    reverseOrder: false,
-    supportsPagination: true,
-  },
-
-  'verify-times': {
-    title: 'Verify Times',
-    description: 'Time taken to verify batches',
-    fetcher: fetchVerifyTimes,
-    aggregatedFetcher: fetchVerifyTimesAggregated,
-    columns: [
-      { key: 'name', label: 'Batch' },
-      { key: 'value', label: 'Time' },
-    ],
-    mapData: (data) =>
-      (data as Record<string, string | number>[]).map((d) => ({
-        ...d,
-        name: Number(d.name).toLocaleString(),
-        value: `${Math.round(Number(d.value) / 60)} minutes`,
-      })),
-    urlKey: 'verify-times',
     reverseOrder: false,
     supportsPagination: true,
   },

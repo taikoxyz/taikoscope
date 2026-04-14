@@ -126,7 +126,7 @@ export const TableRoute: React.FC = () => {
 
         let res;
         let aggRes;
-        if (tableType === 'reorgs' || tableType === 'prove-times' || tableType === 'verify-times') {
+        if (tableType === 'reorgs' || tableType === 'prove-times' ) {
           // For reorgs, fetch one extra item on the first page to detect if a next page exists
           const isFirstPage = startingAfter === undefined && endingBefore === undefined;
           const fetchLimit = tableType === 'reorgs' && isFirstPage ? PAGE_LIMIT + 1 : PAGE_LIMIT;
@@ -202,8 +202,8 @@ export const TableRoute: React.FC = () => {
         const originalData = data;
 
         const getCursor = (item: Record<string, unknown>) => {
-          // For prove-times and verify-times tables, the "name" field is the batch ID
-          if (tableType === 'prove-times' || tableType === 'verify-times') {
+          // For prove-times tables, the "name" field is the batch ID
+          if (tableType === 'prove-times' ) {
             const name = (item as { name?: string }).name;
             return name !== undefined ? Number(name) : undefined;
           }

@@ -4,8 +4,7 @@ use alloy_primitives::Address;
 use clickhouse::{ClickhouseReader, ClickhouseWriter};
 use config::Opts;
 use extractor::{
-    BatchProposedStream, BatchesProvedStream, BatchesVerifiedStream, Extractor,
-    ForcedInclusionStream, ReorgDetector,
+    BatchProposedStream, BatchesProvedStream, Extractor, ForcedInclusionStream, ReorgDetector,
 };
 use eyre::{Context, Result};
 use incident::client::Client as IncidentClient;
@@ -41,7 +40,6 @@ pub struct Driver {
     pub incident_client: IncidentClient,
     pub instatus_batch_submission_component_id: String,
     pub instatus_proof_submission_component_id: String,
-    pub instatus_proof_verification_component_id: String,
     pub instatus_transaction_sequencing_component_id: String,
     pub instatus_public_api_component_id: String,
     pub instatus_monitors_enabled: bool,
@@ -51,7 +49,6 @@ pub struct Driver {
     pub batch_proof_timeout_secs: u64,
     pub public_rpc_url: Option<Url>,
     pub inbox_address: Address,
-    pub taiko_wrapper_address: Address,
 }
 
 impl Driver {
@@ -95,7 +92,6 @@ impl Driver {
             opts.rpc.l2_url.clone(),
             opts.taiko_addresses.inbox_address,
             opts.taiko_addresses.preconf_whitelist_address,
-            opts.taiko_addresses.taiko_wrapper_address,
             opts.taiko_addresses.anchor_address,
         )
         .await
@@ -155,7 +151,6 @@ impl Driver {
         let (
             instatus_batch_submission_component_id,
             instatus_proof_submission_component_id,
-            instatus_proof_verification_component_id,
             instatus_transaction_sequencing_component_id,
             instatus_public_api_component_id,
             incident_client,
@@ -163,14 +158,12 @@ impl Driver {
             (
                 opts.instatus.batch_submission_component_id.clone(),
                 opts.instatus.proof_submission_component_id.clone(),
-                opts.instatus.proof_verification_component_id.clone(),
                 opts.instatus.transaction_sequencing_component_id.clone(),
                 opts.instatus.public_api_component_id.clone(),
                 IncidentClient::new(opts.instatus.api_key.clone(), opts.instatus.page_id.clone()),
             )
         } else {
             (
-                String::new(),
                 String::new(),
                 String::new(),
                 String::new(),
@@ -198,7 +191,6 @@ impl Driver {
             incident_client,
             instatus_batch_submission_component_id,
             instatus_proof_submission_component_id,
-            instatus_proof_verification_component_id,
             instatus_transaction_sequencing_component_id,
             instatus_public_api_component_id,
             instatus_monitors_enabled: opts.instatus.monitors_enabled,
@@ -208,7 +200,6 @@ impl Driver {
             batch_proof_timeout_secs: opts.instatus.batch_proof_timeout_secs,
             public_rpc_url: opts.rpc.public_url,
             inbox_address: opts.taiko_addresses.inbox_address,
-            taiko_wrapper_address: opts.taiko_addresses.taiko_wrapper_address,
         })
     }
 
@@ -231,11 +222,6 @@ impl Driver {
 
     async fn get_batches_proved(&self) -> BatchesProvedStream {
         subscribe_with_retry(|| self.extractor.get_batches_proved_stream(), "batches proved").await
-    }
-
-    async fn get_batches_verified(&self) -> BatchesVerifiedStream {
-        subscribe_with_retry(|| self.extractor.get_batches_verified_stream(), "batches verified")
-            .await
     }
 
     /// Start the driver event loop
@@ -264,7 +250,6 @@ impl Driver {
             let gap_min_l2_block = self.gap_min_l2_block;
             let gap_initial_delay_secs = self.gap_initial_delay_secs;
             let inbox_address = self.inbox_address;
-            let taiko_wrapper_address = self.taiko_wrapper_address;
 
             info!(
                 "Will start initial gap catch-up after {} second delay...",
@@ -285,7 +270,6 @@ impl Driver {
                         writer.as_ref(),
                         &extractor,
                         inbox_address,
-                        taiko_wrapper_address,
                         enable_db_writes && !gap_dry_run,
                         gap_finalization_buffer_blocks,
                         gap_startup_lookback_blocks,
@@ -323,7 +307,6 @@ impl Driver {
         let batch_stream = self.get_batch_proposed().await;
         let forced_stream = self.get_forced_inclusion().await;
         let proved_stream = self.get_batches_proved().await;
-        let verified_stream = self.get_batches_verified().await;
 
         let result = self
             .event_loop(
@@ -332,7 +315,6 @@ impl Driver {
                 batch_stream,
                 forced_stream,
                 proved_stream,
-                verified_stream,
                 shutdown_rx,
             )
             .await;
@@ -359,7 +341,6 @@ impl Driver {
         mut batch_stream: BatchProposedStream,
         mut forced_stream: ForcedInclusionStream,
         mut proved_stream: BatchesProvedStream,
-        mut verified_stream: BatchesVerifiedStream,
         mut shutdown_rx: Option<broadcast::Receiver<()>>,
     ) -> Result<()> {
         info!("Starting event loop - processing events directly to database");
@@ -462,22 +443,6 @@ impl Driver {
                         None => {
                             warn!("Batches proved stream ended; re-subscribing…");
                             proved_stream = self.get_batches_proved().await;
-                        }
-                    }
-                }
-                maybe_verified = verified_stream.next() => {
-                    match maybe_verified {
-                        Some((verified, l1_block_number, l1_tx_hash)) => {
-                            info!(batch_ids = ?verified.batch_id(), "Processing batches verified");
-                            let wrapper = messages::BatchesVerifiedWrapper::from((verified, l1_block_number, l1_tx_hash, false));
-                            let event = TaikoEvent::BatchesVerified(wrapper);
-                            if let Err(e) = self.process_event(event).await {
-                                error!(err = %e, "Failed to process BatchesVerified");
-                            }
-                        }
-                        None => {
-                            warn!("Batches verified stream ended; re-subscribing…");
-                            verified_stream = self.get_batches_verified().await;
                         }
                     }
                 }

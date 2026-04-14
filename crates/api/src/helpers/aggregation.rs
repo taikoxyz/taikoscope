@@ -379,12 +379,6 @@ mod tests {
     }
 
     #[test]
-    fn test_verify_bucket_size_smaller() {
-        let range = TimeRange::Custom(6 * 3600); // 6 hours
-        assert_eq!(verify_bucket_size(&range), 1); // base 5 / 25 = 0 -> 1
-    }
-
-    #[test]
     fn test_blobs_bucket_size_smaller() {
         let range = TimeRange::Custom(12 * 3600); // 12 hours
         assert_eq!(blobs_bucket_size(&range), 2); // base 10 / 5 = 2

@@ -208,7 +208,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         'Active Sequencers': () => onOpenTable('gateways'),
         'Batch Posting Cadence': () => onOpenTable('batch-posting-cadence'),
         'Avg. Prove Time': () => onOpenTable('prove-times', timeRange),
-        'Avg. Verify Time': () => onOpenTable('verify-times', timeRange),
         'Propose Batch Cost': () => onOpenTable('l1-data-cost', timeRange),
       };
       return actions[title];
@@ -257,18 +256,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           key={timeRange}
           data={chartsData.secondsToProveData}
           lineColor={chartSeries.primary}
-        />
-      </ChartCard>,
-      <ChartCard
-        key="verify"
-        title="Avg Verify Time"
-        onMore={() => onOpenTable('verify-times', timeRange)}
-        loading={isLoadingData}
-      >
-        <BatchProcessChart
-          key={`${timeRange}-v`}
-          data={chartsData.secondsToVerifyData}
-          lineColor={chartSeries.accent4}
         />
       </ChartCard>,
       <ChartCard

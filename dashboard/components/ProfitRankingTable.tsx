@@ -156,8 +156,7 @@ export const ProfitRankingTable: React.FC<ProfitRankingTableProps> = ({
     const batchCount = seq.batches;
     const fees = feeAggByName.get(seq.name);
     const proveEth = ((fees?.prove_cost ?? 0) / 1e9);
-    const verifyEth = 0;
-    const extraEth = proveEth + verifyEth;
+    const extraEth = proveEth;
     const extraUsd = extraEth * ethPrice;
     if (!fees) {
       // If no fee data exists for this name, show N/A unless there are operational costs

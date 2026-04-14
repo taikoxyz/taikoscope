@@ -5,8 +5,7 @@ use clickhouse::{AddressBytes, HashBytes, L2HeadEvent};
 use extractor::Extractor;
 use eyre::Result;
 use messages::{
-    BatchProposedWrapper, BatchesProvedWrapper, BatchesVerifiedWrapper,
-    ForcedInclusionProcessedWrapper, TaikoEvent,
+    BatchProposedWrapper, BatchesProvedWrapper, ForcedInclusionProcessedWrapper, TaikoEvent,
 };
 use tracing::{error, info, warn};
 
@@ -49,10 +48,6 @@ impl crate::driver::Driver {
             TaikoEvent::BatchesProved(wrapper) => {
                 info!(batch_ids = ?wrapper.proved.batch_ids_proved(), "Processing batches proved");
                 self.handle_batches_proved_event(wrapper).await
-            }
-            TaikoEvent::BatchesVerified(wrapper) => {
-                info!(batch_id = wrapper.verified.batch_id, "Processing batches verified");
-                self.handle_batches_verified_event(wrapper).await
             }
         }
     }
@@ -135,7 +130,7 @@ impl crate::driver::Driver {
                     batch_id = batch.meta.batchId,
                     last_block = batch.last_block_number(),
                     l1_tx_hash = %wrapper.l1_tx_hash,
-                    tx_list_len = batch.txList.len(),
+                    block_count = batch.info.blocks.len(),
                     "🧪 DRY-RUN: Would process BatchProposed"
                 );
 
@@ -193,33 +188,6 @@ impl crate::driver::Driver {
                 info!(
                     batch_ids = ?proved.batch_ids_proved(),
                     "🧪 DRY-RUN: Would insert proved batch records"
-                );
-
-                Ok(())
-            }
-            TaikoEvent::BatchesVerified(wrapper) => {
-                let verified = &wrapper.verified;
-                info!(
-                    batch_id = verified.batch_id,
-                    l1_block_number = wrapper.l1_block_number,
-                    l1_tx_hash = %wrapper.l1_tx_hash,
-                    "🧪 DRY-RUN: Would process BatchesVerified"
-                );
-
-                // Simulate cost calculation
-                if let Some(cost) =
-                    fetch_transaction_cost(&self.extractor, wrapper.l1_tx_hash).await
-                {
-                    info!(
-                        batch_id = verified.batch_id,
-                        verify_cost = cost,
-                        "🧪 DRY-RUN: Would insert verify cost"
-                    );
-                }
-
-                info!(
-                    batch_id = verified.batch_id,
-                    "🧪 DRY-RUN: Would insert verified batch record"
                 );
 
                 Ok(())
@@ -304,18 +272,6 @@ impl crate::driver::Driver {
 
         let handler = EventHandler::new(writer, &self.extractor, self.enable_db_writes);
         handler.handle_batches_proved(wrapper).await
-    }
-
-    pub async fn handle_batches_verified_event(
-        &self,
-        wrapper: BatchesVerifiedWrapper,
-    ) -> Result<()> {
-        let writer = self.clickhouse_writer.as_ref().ok_or_else(|| {
-            eyre::eyre!("ClickHouse writer not available for batches verified processing")
-        })?;
-
-        let handler = EventHandler::new(writer, &self.extractor, self.enable_db_writes);
-        handler.handle_batches_verified(wrapper).await
     }
 
     pub async fn insert_l2_header_with_stats(&self, header: &primitives::headers::L2Header) {

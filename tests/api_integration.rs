@@ -100,13 +100,6 @@ struct AggregatedCostRow {
     total_cost: u128,
 }
 
-#[derive(Serialize, Row)]
-struct VerifiedBatchRow {
-    l1_block_number: u64,
-    batch_id: u64,
-    block_hash: HashBytes,
-}
-
 #[tokio::test]
 async fn l2_head_block_integration() {
     let mock = Mock::new();
@@ -237,13 +230,10 @@ async fn blobs_per_batch_desc_order() {
     server.abort();
 }
 
-// removed: block_profits integration test (endpoint removed)
-
 #[tokio::test]
 async fn verify_times_integration() {
     let mock = Mock::new();
     mock.add(handlers::provide(vec![clickhouse_lib::BatchVerifyTimeRow {
-        l1_block_number: 2,
         batch_id: 1,
         seconds_to_verify: 456,
     }]));
@@ -265,7 +255,7 @@ async fn verify_times_integration() {
     assert_eq!(
         body,
         serde_json::json!({
-            "batches": [ { "l1_block_number": 2, "batch_id": 1, "seconds_to_verify": 456 } ]
+            "batches": [ { "batch_id": 1, "seconds_to_verify": 456 } ]
         })
     );
 

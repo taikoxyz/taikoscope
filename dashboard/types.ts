@@ -87,7 +87,6 @@ export interface BlockProfit {
 
 export interface ChartsDataUpdate {
   proveTimes?: TimeSeriesData[];
-  verifyTimes?: TimeSeriesData[];
   l2Times?: TimeSeriesData[];
   l2Gas?: TimeSeriesData[];
   txPerBlock?: BlockTransaction[];
@@ -97,7 +96,6 @@ export interface ChartsDataUpdate {
 
 export interface ChartsData {
   secondsToProveData: TimeSeriesData[];
-  secondsToVerifyData: TimeSeriesData[];
   l2BlockTimeData: TimeSeriesData[];
   l2GasUsedData: TimeSeriesData[];
   blockTxData: BlockTransaction[];

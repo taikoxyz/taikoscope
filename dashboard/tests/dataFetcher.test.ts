@@ -41,7 +41,7 @@ describe('dataFetcher', () => {
         l2_head_block: 10,
         l1_head_block: 11,
       }),
-      fetchProveTimes: ok([{ name: '1', value: 1, timestamp: 0 }]),
+      fetchProveTimesAggregated: ok([{ name: '1', value: 1, timestamp: 0 }]),
       fetchL2BlockTimesAggregated: ok([{ value: 2, timestamp: 0 }]),
       fetchL2GasUsedAggregated: ok([{ value: 3, timestamp: 0 }]),
       fetchSequencerDistribution: ok([
@@ -50,25 +50,25 @@ describe('dataFetcher', () => {
       fetchBlockTransactionsAggregated: ok([
         { block: 1, txs: 2, sequencer: 'bar' },
       ]),
-      fetchBatchBlobCounts: ok([{ block: 10, batch: 1, blobs: 2 }]),
+      fetchBatchBlobCountsAggregated: ok([{ block: 10, batch: 1, blobs: 2 }]),
     });
 
     const res = await fetchMainDashboardData('1h', null);
     expect(res.avgProve).toBe(3);
     expect(res.sequencerDist[0].name).toBe('foo');
     expect(res.txPerBlock).toHaveLength(1);
-    expect(res.badRequestResults).toHaveLength(7);
+    expect(res.badRequestResults).toHaveLength(6);
   });
 
   it('defaults to empty arrays when service data missing', async () => {
     setAll({
       fetchDashboardData: ok(null),
-      fetchProveTimes: ok(null),
+      fetchProveTimesAggregated: ok(null),
       fetchL2BlockTimesAggregated: ok(null),
       fetchL2GasUsedAggregated: ok(null),
       fetchSequencerDistribution: ok(null),
       fetchBlockTransactionsAggregated: ok(null),
-      fetchBatchBlobCounts: ok(null),
+      fetchBatchBlobCountsAggregated: ok(null),
     });
 
     const res = await fetchMainDashboardData('1h', null);
@@ -76,7 +76,7 @@ describe('dataFetcher', () => {
     expect(res.sequencerDist).toEqual([]);
     expect(res.txPerBlock).toEqual([]);
     expect(res.blobsPerBatch).toEqual([]);
-    expect(res.badRequestResults).toHaveLength(7);
+    expect(res.badRequestResults).toHaveLength(6);
   });
 
   it('fetches economics data', async () => {
