@@ -52,24 +52,36 @@ const q15m = 'created%5Bgt%5D=-900000&created%5Blte%5D=0';
 const q1h = 'created%5Bgt%5D=-3600000&created%5Blte%5D=0';
 const q24h = 'created%5Bgt%5D=-86400000&created%5Blte%5D=0';
 
-const responses: Record<string, Record<string, unknown>> = {
-  [`/v1/l2-block-cadence?${q15m}`]: { l2_block_cadence_ms: 60000 },
-  [`/v1/batch-posting-cadence?${q15m}`]: { batch_posting_cadence_ms: 120000 },
-  [`/v1/avg-prove-time?${q15m}`]: { avg_prove_time_ms: 1500 },
-  [`/v1/avg-prove-time?${q1h}`]: { avg_prove_time_ms: 1500 },
-  [`/v1/l2-block-cadence?${q1h}`]: { l2_block_cadence_ms: 60000 },
-  [`/v1/batch-posting-cadence?${q1h}`]: { batch_posting_cadence_ms: 120000 },
-  '/v1/preconf-data': {
+const dashboardDataFixture = {
+  l2_block_cadence_ms: 60000,
+  batch_posting_cadence_ms: 120000,
+  avg_prove_time_ms: 1500,
+  avg_verify_time_ms: 1800,
+  avg_tps: 1.5,
+  l2_reorgs: 0,
+  slashings: 0,
+  forced_inclusions: 0,
+  failed_proposals: 0,
+  l2_head_block: 1,
+  l1_head_block: 1,
+  preconf_data: {
     candidates: ['gw1', 'gw2'],
     current_operator: '0xaaa',
     next_operator: '0xbbb',
   },
-  [`/v1/dashboard-data?${q1h}`]: {
-    preconf_data: {
-      candidates: ['gw1', 'gw2'],
-      current_operator: '0xaaa',
-      next_operator: '0xbbb',
-    },
+};
+
+const responses: Record<string, Record<string, unknown>> = {
+  // Post-shasta, the single-value routes (avg-prove-time, avg-verify-time,
+  // l2-block-cadence, batch-posting-cadence) were consolidated into
+  // /dashboard-data. The dashboard fetchers now all delegate there.
+  // The $q15m fixture lives further down because it pre-existed and the
+  // app-rendering assertions are keyed to its specific values.
+  [`/v1/dashboard-data?${q1h}`]: dashboardDataFixture,
+  '/v1/preconf-data': {
+    candidates: ['gw1', 'gw2'],
+    current_operator: '0xaaa',
+    next_operator: '0xbbb',
   },
   [`/v1/reorgs?${q1h}`]: {
     events: [
