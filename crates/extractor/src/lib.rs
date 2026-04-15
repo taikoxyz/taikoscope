@@ -517,7 +517,19 @@ impl Extractor {
     }
 
     async fn get_last_block_id_by_batch_id_with_retry(&self, batch_id: u64) -> Result<u64> {
-        const MAX_RETRIES: u32 = 20;
+        // Observed on mainnet Shasta (2026-04-15): the L2 node sometimes needs
+        // longer than 10s (= 20 * 500ms) to populate the
+        // `taikoAuth_lastBlockIDByBatchID` mapping for a fresh proposal,
+        // because it waits for the L2 blocks derived from the proposal's
+        // blob sources to be seen and executed. When the mapping isn't ready
+        // in time, the retry loop gives up and the proposal is dropped,
+        // which widens the gap between ingested batches and trips false
+        // "No BatchProposed events" alerts.
+        //
+        // Give the node up to 3 minutes (360 attempts * 500ms). The loop
+        // short-circuits immediately on Ok(Some), so this only increases the
+        // latency for proposals that actually need to wait.
+        const MAX_RETRIES: u32 = 360;
         const DELAY_MS: u64 = 500;
 
         for attempt in 0..MAX_RETRIES {
