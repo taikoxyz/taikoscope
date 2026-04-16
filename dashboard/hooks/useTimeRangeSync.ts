@@ -4,7 +4,8 @@ import { TimeRange } from '../types';
 import { isValidTimeRange } from '../utils/timeRange';
 
 const DEFAULT_TIME_RANGE: TimeRange = '24h';
-const BATCH_DATA_DEFAULT_TIME_RANGE: TimeRange = '14d';
+const ECONOMICS_DEFAULT_TIME_RANGE: TimeRange = '14d';
+const HEALTH_DEFAULT_TIME_RANGE: TimeRange = '30d';
 
 /**
  * Hook that synchronizes time range state with URL parameters to prevent navigation loops
@@ -17,9 +18,9 @@ export const useTimeRangeSync = () => {
   const getDefaultTimeRange = useCallback((): TimeRange => {
     const params = new URLSearchParams(location.search);
     const view = params.get('view');
-    return view === 'economics' || view === 'health'
-      ? BATCH_DATA_DEFAULT_TIME_RANGE
-      : DEFAULT_TIME_RANGE;
+    if (view === 'economics') return ECONOMICS_DEFAULT_TIME_RANGE;
+    if (view === 'health') return HEALTH_DEFAULT_TIME_RANGE;
+    return DEFAULT_TIME_RANGE;
   }, [location.search]);
 
   // Get initial time range from URL or use default

@@ -223,7 +223,7 @@ describe('navigationUtils', () => {
   });
 
   describe('useTimeRangeSync', () => {
-    it('defaults batch-data views to 14d when no range is provided', async () => {
+    it('uses wider defaults for batch-data views when no range is provided', async () => {
       const { useTimeRangeSync } = await import('../hooks/useTimeRangeSync');
       let value = '';
 
@@ -239,7 +239,7 @@ describe('navigationUtils', () => {
 
       currentSearch = '?view=health';
       renderToStaticMarkup(React.createElement(Wrapper));
-      expect(value).toBe('14d');
+      expect(value).toBe('30d');
     });
 
     it('handles rapid range changes via history navigation', async () => {
