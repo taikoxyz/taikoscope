@@ -42,17 +42,6 @@ impl TaikoPreconfWhitelist {
         }
     }
 
-    /// Get the operator candidates for the current epoch.
-    pub async fn get_operator_candidates_for_current_epoch(&self) -> ContractResult<Vec<Address>> {
-        match self.0.getOperatorCandidatesForCurrentEpoch().call().await {
-            Ok(result) => Ok(result),
-            Err(err) => {
-                let decoded_error = try_parse_contract_error::<IPreconfWhitelistErrors>(err)?;
-                Err(SolError::custom(format!("{decoded_error:?}")).into())
-            }
-        }
-    }
-
     /// Check if an address is active in the whitelist for a given epoch.
     ///
     /// Note: "active" in the contract just means that the operator is able to be selected as the
@@ -110,10 +99,6 @@ sol! {
         ///      of randomness.
         /// @return The address of the operator.
         function getOperatorForNextEpoch() external view returns (address operator);
-
-        /// @notice Retrieves the operator candidates for the current epoch.
-        /// @return The addresses of the operator candidates.
-        function getOperatorCandidatesForCurrentEpoch() external view returns (address[] memory);
 
         /// @notice Check if an address is an active operator in the whitelist.
         /// @param operator The address to check.

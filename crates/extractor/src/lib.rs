@@ -613,12 +613,6 @@ impl Extractor {
         Ok(timestamp)
     }
 
-    /// Get the operator candidates for the current epoch
-    pub async fn get_operator_candidates_for_current_epoch(&self) -> Result<Vec<Address>> {
-        let candidates = self.preconf_whitelist.get_operator_candidates_for_current_epoch().await?;
-        Ok(candidates)
-    }
-
     /// Calculate aggregated statistics for an L2 block by fetching its receipts.
     pub async fn get_l2_block_stats(
         &self,

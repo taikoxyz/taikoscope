@@ -117,7 +117,6 @@ export interface MetricsDataState {
 export interface BlockDataState {
   l2HeadBlock: string;
   l1HeadBlock: string;
-  candidates: string[];
   updateBlockHeads: () => Promise<void>;
   updateMetricsWithBlockHeads: (metrics: MetricData[]) => MetricData[];
 }

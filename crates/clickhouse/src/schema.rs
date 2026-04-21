@@ -53,7 +53,6 @@ pub const TABLE_SCHEMAS: &[TableSchema] = &[
     TableSchema {
         name: "preconf_data",
         columns: "slot UInt64,
-                 candidates Array(FixedString(20)),
                  current_operator Nullable(FixedString(20)),
                  next_operator Nullable(FixedString(20)),
                  inserted_at DateTime64(3) DEFAULT now64()",

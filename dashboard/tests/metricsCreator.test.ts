@@ -11,7 +11,6 @@ describe('metricsCreator', () => {
       l2Cadence: 60000,
       batchCadence: 30000,
       avgProve: 2000,
-      activeGateways: 2,
       currentOperator: addressA,
       nextOperator: addressB,
       l2Reorgs: 1,
@@ -28,8 +27,9 @@ describe('metricsCreator', () => {
       l1Block: 50,
     });
 
-    expect(metrics).toHaveLength(18);
+    expect(metrics).toHaveLength(17);
     expect(metrics[0].value).toBe('1.2');
+    expect(metrics.find((m) => m.title === 'Active Sequencers')).toBeUndefined();
 
     const proveMetric = metrics.find((m) => m.title === 'Avg. Prove Time');
     expect(proveMetric?.value).toBe('2s');
@@ -60,7 +60,6 @@ describe('metricsCreator', () => {
       l2Cadence: null,
       batchCadence: null,
       avgProve: null,
-      activeGateways: null,
       currentOperator: null,
       nextOperator: null,
       l2Reorgs: null,

@@ -18,7 +18,6 @@ interface DashboardContextType {
   timeRange: TimeRange;
   setTimeRange: (range: TimeRange) => void;
   selectedSequencer: string | null;
-  sequencerList: string[];
   chartsData: ChartsData;
   metricsData: MetricsDataState;
   refreshTimer: RefreshTimerState;

@@ -455,15 +455,12 @@ impl ClickhouseWriter {
     pub async fn insert_preconf_data(
         &self,
         slot: u64,
-        candidates: Vec<Address>,
         current_operator: Option<Address>,
         next_operator: Option<Address>,
     ) -> Result<()> {
         let client = self.base.clone();
-        let candidate_array = candidates.into_iter().map(AddressBytes::from).collect();
         let data = PreconfData {
             slot,
-            candidates: candidate_array,
             current_operator: current_operator.map(AddressBytes::from),
             next_operator: next_operator.map(AddressBytes::from),
         };
@@ -697,19 +694,11 @@ mod tests {
         let url = Url::parse(mock.url()).unwrap();
         let writer = ClickhouseWriter::new(url, "db".to_owned(), "user".into(), "pass".into());
 
-        let candidates = vec![Address::repeat_byte(1), Address::repeat_byte(2)];
-        writer
-            .insert_preconf_data(5, candidates.clone(), Some(Address::repeat_byte(3)), None)
-            .await
-            .unwrap();
+        writer.insert_preconf_data(5, Some(Address::repeat_byte(3)), None).await.unwrap();
 
         let rows: Vec<PreconfData> = ctl.collect().await;
         let expected = PreconfData {
             slot: 5,
-            candidates: vec![
-                AddressBytes::from(Address::repeat_byte(1)),
-                AddressBytes::from(Address::repeat_byte(2)),
-            ],
             current_operator: Some(AddressBytes::from(Address::repeat_byte(3))),
             next_operator: None,
         };
