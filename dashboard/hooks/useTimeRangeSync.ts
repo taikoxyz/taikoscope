@@ -4,6 +4,8 @@ import { TimeRange } from '../types';
 import { isValidTimeRange } from '../utils/timeRange';
 
 const DEFAULT_TIME_RANGE: TimeRange = '24h';
+const ECONOMICS_DEFAULT_TIME_RANGE: TimeRange = '14d';
+const HEALTH_DEFAULT_TIME_RANGE: TimeRange = '30d';
 
 /**
  * Hook that synchronizes time range state with URL parameters to prevent navigation loops
@@ -12,6 +14,14 @@ const DEFAULT_TIME_RANGE: TimeRange = '24h';
 export const useTimeRangeSync = () => {
   const location = useLocation();
   const navigate = useNavigate();
+
+  const getDefaultTimeRange = useCallback((): TimeRange => {
+    const params = new URLSearchParams(location.search);
+    const view = params.get('view');
+    if (view === 'economics') return ECONOMICS_DEFAULT_TIME_RANGE;
+    if (view === 'health') return HEALTH_DEFAULT_TIME_RANGE;
+    return DEFAULT_TIME_RANGE;
+  }, [location.search]);
 
   // Get initial time range from URL or use default
   const getInitialTimeRange = useCallback((): TimeRange => {
@@ -29,8 +39,8 @@ export const useTimeRangeSync = () => {
     const urlRange = params.get('range');
     return urlRange && isValidTimeRange(urlRange)
       ? (urlRange as TimeRange)
-      : DEFAULT_TIME_RANGE;
-  }, [location.search]);
+      : getDefaultTimeRange();
+  }, [getDefaultTimeRange, location.search]);
 
   const [timeRange, setTimeRangeState] =
     useState<TimeRange>(getInitialTimeRange);
@@ -52,7 +62,7 @@ export const useTimeRangeSync = () => {
         newParams.set('end', e);
         newParams.delete('range');
       } else {
-        if (newRange === DEFAULT_TIME_RANGE) {
+        if (newRange === getDefaultTimeRange()) {
           newParams.delete('range');
         } else {
           newParams.set('range', newRange);
@@ -66,7 +76,7 @@ export const useTimeRangeSync = () => {
         { replace: true },
       );
     },
-    [location.search, navigate],
+    [getDefaultTimeRange, location.search, navigate],
   );
 
   // Sync state when URL changes (e.g., browser back/forward)

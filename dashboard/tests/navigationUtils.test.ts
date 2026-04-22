@@ -128,6 +128,9 @@ describe('navigationUtils', () => {
       const params = new URLSearchParams('range=1h');
       expect(validateSearchParams(params)).toBe(true);
 
+      const widerParams = new URLSearchParams('range=14d');
+      expect(validateSearchParams(widerParams)).toBe(true);
+
       const invalidParams = new URLSearchParams('range=invalid');
       expect(validateSearchParams(invalidParams)).toBe(false);
     });
@@ -220,6 +223,25 @@ describe('navigationUtils', () => {
   });
 
   describe('useTimeRangeSync', () => {
+    it('uses wider defaults for batch-data views when no range is provided', async () => {
+      const { useTimeRangeSync } = await import('../hooks/useTimeRangeSync');
+      let value = '';
+
+      function Wrapper() {
+        const { timeRange } = useTimeRangeSync();
+        value = timeRange;
+        return null;
+      }
+
+      currentSearch = '?view=economics';
+      renderToStaticMarkup(React.createElement(Wrapper));
+      expect(value).toBe('14d');
+
+      currentSearch = '?view=health';
+      renderToStaticMarkup(React.createElement(Wrapper));
+      expect(value).toBe('30d');
+    });
+
     it('handles rapid range changes via history navigation', async () => {
       const { useTimeRangeSync } = await import('../hooks/useTimeRangeSync');
       let setFn: (r: string) => void = () => {};

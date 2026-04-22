@@ -2,7 +2,11 @@ import React from 'react';
 import { TimeRange } from '../types';
 import { RefreshCountdown } from './RefreshCountdown';
 import { isValidRefreshRate } from '../utils';
-import { isValidTimeRange, formatTimeRangeDisplay } from '../utils/timeRange';
+import {
+  isValidTimeRange,
+  formatTimeRangeDisplay,
+  MAX_TIME_RANGE_DAYS,
+} from '../utils/timeRange';
 import { useRouterNavigation } from '../hooks/useRouterNavigation';
 import { DEFAULT_VIEW } from '../constants';
 import { useErrorHandler } from '../hooks/useErrorHandler';
@@ -29,7 +33,7 @@ const NETWORK_NAME =
   rawNetworkName.charAt(0).toUpperCase() +
   rawNetworkName.slice(1).toLowerCase();
 const DASHBOARD_TITLE = `Taikoscope ${NETWORK_NAME}`;
-const MAX_CUSTOM_DAYS = 7;
+const MAX_CUSTOM_DAYS = MAX_TIME_RANGE_DAYS;
 const CUSTOM_RANGE_LIMIT_MESSAGE = `Custom time range is limited to ${MAX_CUSTOM_DAYS} days.`;
 
 interface DashboardHeaderProps {
@@ -137,6 +141,8 @@ export const TimeRangeSelector: React.FC<TimeRangeSelectorProps> = ({
     '12h',
     '24h',
     '7d',
+    '14d',
+    '30d',
   ];
   const isCustom = /^\d+-\d+$/.test(currentTimeRange);
   const [open, setOpen] = React.useState(false);

@@ -1,3 +1,7 @@
+export const MAX_TIME_RANGE_DAYS = 30;
+const MAX_TIME_RANGE_MINUTES = MAX_TIME_RANGE_DAYS * 24 * 60;
+const MAX_TIME_RANGE_MS = MAX_TIME_RANGE_DAYS * 24 * 60 * 60 * 1000;
+
 export const isValidTimeRange = (range: string): boolean => {
   const trimmed = range.trim();
   const match = trimmed.match(/^(\d+)([mhd])$/i);
@@ -7,7 +11,7 @@ export const isValidTimeRange = (range: string): boolean => {
     const unit = match[2].toLowerCase();
     const minutes =
       unit === 'h' ? value * 60 : unit === 'd' ? value * 24 * 60 : value;
-    return minutes <= 7 * 24 * 60;
+    return minutes <= MAX_TIME_RANGE_MINUTES;
   }
 
   const custom = trimmed.match(/^(\d+)-(\d+)$/);
@@ -15,7 +19,7 @@ export const isValidTimeRange = (range: string): boolean => {
     const start = parseInt(custom[1], 10);
     const end = parseInt(custom[2], 10);
     if (isNaN(start) || isNaN(end) || end <= start) return false;
-    return end - start <= 7 * 24 * 60 * 60 * 1000;
+    return end - start <= MAX_TIME_RANGE_MS;
   }
 
   return false;
