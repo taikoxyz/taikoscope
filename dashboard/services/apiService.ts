@@ -103,13 +103,30 @@ export interface AvgTimeResponse {
   avg_prove_time_ms?: number;
 }
 
+// NOTE: The shasta API consolidation (taikoscope#1134) removed several
+// standalone single-value routes — `/avg-prove-time`, `/avg-verify-time`,
+// `/l2-block-cadence`, `/batch-posting-cadence` — and folded them into
+// `/dashboard-data`. The fetchers below still exist for source-compatibility
+// with the dashboard call sites, but now delegate to `fetchDashboardData` so
+// they stop 404ing in production.
+
 export const fetchAvgProveTime = async (
   range: TimeRange,
 ): Promise<RequestResult<number>> => {
-  const url = `${API_BASE}/avg-prove-time?${timeRangeToQuery(range)}`;
-  const res = await fetchJson<{ avg_prove_time_ms?: number }>(url);
+  const res = await fetchDashboardData(range);
   return {
     data: res.data?.avg_prove_time_ms ?? null,
+    badRequest: res.badRequest,
+    error: res.error,
+  };
+};
+
+export const fetchAvgVerifyTime = async (
+  range: TimeRange,
+): Promise<RequestResult<number>> => {
+  const res = await fetchDashboardData(range);
+  return {
+    data: res.data?.avg_verify_time_ms ?? null,
     badRequest: res.badRequest,
     error: res.error,
   };
@@ -119,10 +136,7 @@ export const fetchL2BlockCadence = async (
   range: TimeRange,
   address?: string,
 ): Promise<RequestResult<number>> => {
-  const url =
-    `${API_BASE}/l2-block-cadence?${timeRangeToQuery(range)}` +
-    (address ? `&address=${address}` : '');
-  const res = await fetchJson<{ l2_block_cadence_ms?: number }>(url);
+  const res = await fetchDashboardData(range, address);
   return {
     data: res.data?.l2_block_cadence_ms ?? null,
     badRequest: res.badRequest,
@@ -133,8 +147,7 @@ export const fetchL2BlockCadence = async (
 export const fetchBatchPostingCadence = async (
   range: TimeRange,
 ): Promise<RequestResult<number>> => {
-  const url = `${API_BASE}/batch-posting-cadence?${timeRangeToQuery(range)}`;
-  const res = await fetchJson<{ batch_posting_cadence_ms?: number }>(url);
+  const res = await fetchDashboardData(range);
   return {
     data: res.data?.batch_posting_cadence_ms ?? null,
     badRequest: res.badRequest,
