@@ -1,5 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
-import { getSequencerName } from '../sequencerConfig';
+import { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import type { MetricData } from '../types';
 
@@ -7,7 +6,6 @@ interface UseSequencerHandlerProps {
   blockData: {
     l1HeadBlock: string;
     l2HeadBlock: string;
-    candidates: string[];
     updateMetricsWithBlockHeads: (metrics: MetricData[]) => MetricData[];
   };
   metricsData: {
@@ -20,11 +18,6 @@ export const useSequencerHandler = ({ blockData, metricsData }: UseSequencerHand
   const [searchParams] = useSearchParams();
   const [selectedSequencer, setSelectedSequencer] = useState<string | null>(
     searchParams.get('sequencer'),
-  );
-
-  const sequencerList = useMemo(
-    () => blockData.candidates.map((a) => getSequencerName(a)),
-    [blockData.candidates],
   );
 
   // Sync with URL params - extract specific value to avoid object dependency
@@ -54,6 +47,5 @@ export const useSequencerHandler = ({ blockData, metricsData }: UseSequencerHand
   return {
     selectedSequencer,
     setSelectedSequencer,
-    sequencerList,
   };
 };

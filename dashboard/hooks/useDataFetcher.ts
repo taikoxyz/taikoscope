@@ -67,7 +67,6 @@ export const useDataFetcher = ({
         l2Cadence: null,
         batchCadence: null,
         avgProve: null,
-        activeGateways: null,
         currentOperator: null,
         nextOperator: null,
       l2Reorgs: null,
@@ -110,9 +109,6 @@ export const useDataFetcher = ({
     );
 
     const anyBadRequest = hasBadRequest(data.badRequestResults);
-    const activeGateways = data.preconfData
-      ? data.preconfData.candidates.length
-      : null;
     const currentOperator = data.preconfData?.current_operator ?? null;
     const nextOperator = data.preconfData?.next_operator ?? null;
 
@@ -121,7 +117,6 @@ export const useDataFetcher = ({
       l2Cadence: data.l2Cadence,
       batchCadence: data.batchCadence,
       avgProve: data.avgProve,
-      activeGateways,
       currentOperator,
       nextOperator,
       l2Reorgs: data.l2Reorgs,

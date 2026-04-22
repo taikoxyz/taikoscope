@@ -205,7 +205,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         'Failed Proposals': () => onOpenTable('failed-proposals'),
         'Slashing Events': () => onOpenTable('slashings'),
         'Forced Inclusions': () => onOpenTable('forced-inclusions'),
-        'Active Sequencers': () => onOpenTable('gateways'),
         'Batch Posting Cadence': () => onOpenTable('batch-posting-cadence'),
         'Avg. Prove Time': () => onOpenTable('prove-times', timeRange),
         'Propose Batch Cost': () => onOpenTable('l1-data-cost', timeRange),

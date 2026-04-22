@@ -20,11 +20,11 @@ export const useDashboardController = () => {
   // Data management hooks
   const metricsData = useMetricsData();
   const chartsData = useChartsData();
-  const blockData = useBlockData(timeRange);
+  const blockData = useBlockData();
   const refreshTimer = useRefreshTimer();
 
   // Sequencer handling
-  const { selectedSequencer, setSelectedSequencer, sequencerList } =
+  const { selectedSequencer, setSelectedSequencer } =
     useSequencerHandler({ blockData, metricsData });
 
 
@@ -85,7 +85,6 @@ export const useDashboardController = () => {
     timeRange,
     setTimeRange,
     selectedSequencer,
-    sequencerList,
 
     // Data
     metricsData,

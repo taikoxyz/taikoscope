@@ -9,7 +9,6 @@ ORDER BY (l1_block_number);
 
 CREATE TABLE IF NOT EXISTS ${DB}.preconf_data (
     slot UInt64,
-    candidates Array(FixedString(20)),
     current_operator Nullable(FixedString(20)),
     next_operator Nullable(FixedString(20)),
     inserted_at DateTime64(3) DEFAULT now64()
@@ -86,4 +85,3 @@ CREATE TABLE IF NOT EXISTS ${DB}.l1_data_costs (
     inserted_at DateTime64(3) DEFAULT now64()
 ) ENGINE = MergeTree()
 ORDER BY (l1_block_number);
-

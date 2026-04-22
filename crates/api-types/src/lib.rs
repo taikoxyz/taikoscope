@@ -140,11 +140,9 @@ pub struct FailedProposalEventsResponse {
 
 // Removed legacy ActiveGatewaysResponse, CurrentOperatorResponse, NextOperatorResponse
 
-/// Preconfiguration data containing sequencer candidates and operators.
+/// Preconfiguration data containing operators
 #[derive(Debug, Serialize, ToSchema)]
 pub struct PreconfDataResponse {
-    /// Candidates included in the latest preconfiguration.
-    pub candidates: Vec<String>,
     /// Current operator address, if any.
     pub current_operator: Option<String>,
     /// Address of the next operator, if configured.

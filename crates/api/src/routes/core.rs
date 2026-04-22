@@ -82,7 +82,7 @@ pub async fn l1_head_block(
     ),
     tag = "taikoscope"
 )]
-/// Get the most recent preconfiguration data including candidates and operators
+/// Get the most recent preconfiguration data
 pub async fn preconf_data(
     State(state): State<ApiState>,
 ) -> Result<Json<PreconfDataResponse>, ErrorResponse> {
@@ -92,11 +92,9 @@ pub async fn preconf_data(
         .await
         .map_err(|e| database_error("get preconf data", e))?;
 
-    let empty =
-        PreconfDataResponse { candidates: Vec::new(), current_operator: None, next_operator: None };
+    let empty = PreconfDataResponse { current_operator: None, next_operator: None };
 
     let resp = data.map_or(empty, |d| PreconfDataResponse {
-        candidates: d.candidates.into_iter().map(format_address).collect(),
         current_operator: d.current_operator.map(format_address),
         next_operator: d.next_operator.map(format_address),
     });

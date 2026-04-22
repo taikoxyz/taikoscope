@@ -42,13 +42,6 @@ export const useRouterNavigation = () => {
     [navigate, searchParams],
   );
 
-  const navigateToSequencer = useCallback(
-    (address: string) => {
-      safeNavigate(navigate, `/sequencer/${address}`);
-    },
-    [navigate],
-  );
-
   const navigateToDashboard = useCallback(
     (preserveParams = false) => {
       if (preserveParams) {
@@ -93,7 +86,6 @@ export const useRouterNavigation = () => {
 
   return {
     navigateToTable,
-    navigateToSequencer,
     navigateToDashboard,
     updateSearchParams,
   };

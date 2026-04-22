@@ -30,7 +30,6 @@ describe('dataFetcher', () => {
         avg_prove_time_ms: 3,
         avg_tps: 5,
         preconf_data: {
-          candidates: ['a'],
           current_operator: 'x',
           next_operator: 'y',
         },
