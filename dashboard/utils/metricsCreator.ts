@@ -14,7 +14,6 @@ export interface MetricInputData {
   l2Cadence: number | null;
   batchCadence: number | null;
   avgProve: number | null;
-  activeGateways: number | null;
   currentOperator: string | null;
   nextOperator: string | null;
   l2Reorgs: number | null;
@@ -58,14 +57,6 @@ export const createMetrics = (data: MetricInputData): MetricData[] => [
         ? formatSeconds(data.avgProve / 1000)
         : 'N/A',
     group: 'Network Health',
-  },
-  {
-    title: 'Active Sequencers',
-    value:
-      data.activeGateways != null
-        ? formatWithCommas(data.activeGateways)
-        : 'N/A',
-    group: 'Sequencers',
   },
   {
     title: 'Current Sequencer',

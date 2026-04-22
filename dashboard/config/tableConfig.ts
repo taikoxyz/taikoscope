@@ -11,7 +11,6 @@ import {
   fetchSlashingEvents,
   fetchForcedInclusionEvents,
   fetchFailedProposalEvents,
-  fetchActiveSequencerAddresses,
   fetchBatchBlobCounts,
   fetchBatchPostingTimes,
   fetchProveTimes,
@@ -148,25 +147,6 @@ export const TABLE_CONFIGS: Record<string, TableConfig> = {
       })),
     urlKey: 'forced-inclusions',
     reverseOrder: true,
-  },
-
-  gateways: {
-    title: 'Active Sequencers',
-    description: 'Current candidates to be the sequencer.',
-    fetcher: fetchActiveSequencerAddresses,
-    columns: [
-      { key: 'sequencer', label: 'Sequencer' },
-      { key: 'address', label: 'Address' },
-    ],
-    mapData: (data) =>
-      data.map((g) => {
-        const name = getSequencerName(g);
-        return {
-          sequencer: name === g ? 'Unknown' : name,
-          address: addressLink(g),
-        };
-      }),
-    urlKey: 'gateways',
   },
 
   'blobs-per-batch': {

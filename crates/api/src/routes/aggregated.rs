@@ -118,7 +118,6 @@ pub async fn dashboard_data(
     })?;
 
     let preconf_data = preconf.map(|d| PreconfDataResponse {
-        candidates: d.candidates.into_iter().map(format_address).collect(),
         current_operator: d.current_operator.map(format_address),
         next_operator: d.next_operator.map(format_address),
     });

@@ -79,7 +79,6 @@ const responses: Record<string, Record<string, unknown>> = {
   // app-rendering assertions are keyed to its specific values.
   [`/v1/dashboard-data?${q1h}`]: dashboardDataFixture,
   '/v1/preconf-data': {
-    candidates: ['gw1', 'gw2'],
     current_operator: '0xaaa',
     next_operator: '0xbbb',
   },
@@ -179,7 +178,7 @@ const responses: Record<string, Record<string, unknown>> = {
     batch_posting_cadence_ms: 2,
     avg_prove_time_ms: 3,
     avg_tps: 5,
-    preconf_data: { candidates: [] },
+    preconf_data: {},
     l2_reorgs: 6,
     slashings: 7,
     forced_inclusions: 8,
@@ -254,7 +253,6 @@ async function fetchData(range: TimeRange, state: State, economics = false) {
       l2Cadence: null,
       batchCadence: null,
       avgProve: null,
-      activeGateways: null,
       currentOperator: null,
       nextOperator: null,
       l2Reorgs: null,
@@ -319,7 +317,6 @@ async function fetchData(range: TimeRange, state: State, economics = false) {
   const batchCadence = batchCadenceRes.data;
   const avgProve = avgProveRes.data;
   const preconfData = preconfRes.data;
-  const activeGateways = preconfData ? preconfData.candidates.length : null;
   const currentOperator = preconfData?.current_operator ?? null;
   const nextOperator = preconfData?.next_operator ?? null;
   const l2Reorgs = l2ReorgsRes.data;
@@ -361,7 +358,6 @@ async function fetchData(range: TimeRange, state: State, economics = false) {
     l2Cadence,
     batchCadence,
     avgProve,
-    activeGateways,
     currentOperator,
     nextOperator,
     l2Reorgs,
@@ -487,7 +483,7 @@ it('fetches dashboard data correctly', async () => {
     batch_posting_cadence_ms: 2,
     avg_prove_time_ms: 3,
     avg_tps: 5,
-    preconf_data: { candidates: [] },
+    preconf_data: {},
     l2_reorgs: 6,
     slashings: 7,
     forced_inclusions: 8,

@@ -1065,30 +1065,6 @@ pub async fn process_preconf_data_for_backfill(
     extractor: &Extractor,
     header: &primitives::headers::L1Header,
 ) {
-    // Get operator candidates for current epoch
-    let opt_candidates = match extractor.get_operator_candidates_for_current_epoch().await {
-        Ok(c) => {
-            info!(
-                slot = header.slot,
-                block = header.number,
-                candidates = ?c,
-                candidates_count = c.len(),
-                "Successfully retrieved operator candidates for backfill"
-            );
-            Some(c)
-        }
-        Err(e) => {
-            error!(
-                slot = header.slot,
-                block = header.number,
-                err = %e,
-                "Failed picking operator candidates during backfill"
-            );
-            None
-        }
-    };
-    let candidates = opt_candidates.unwrap_or_else(Vec::new);
-
     // Get current operator for epoch
     let opt_current_operator = match extractor.get_operator_for_current_epoch().await {
         Ok(op) => {
@@ -1133,12 +1109,7 @@ pub async fn process_preconf_data_for_backfill(
     if let Some(writer) = writer {
         if opt_current_operator.is_some() || opt_next_operator.is_some() {
             if let Err(e) = writer
-                .insert_preconf_data(
-                    header.slot,
-                    candidates,
-                    opt_current_operator,
-                    opt_next_operator,
-                )
+                .insert_preconf_data(header.slot, opt_current_operator, opt_next_operator)
                 .await
             {
                 error!(slot = header.slot, err = %e, "Failed to insert preconf data during backfill");

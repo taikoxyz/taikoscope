@@ -21,8 +21,6 @@ pub struct L1HeadEvent {
 pub struct PreconfData {
     /// Slot
     pub slot: u64,
-    /// Candidates
-    pub candidates: Vec<AddressBytes>,
     /// Current operator
     pub current_operator: Option<AddressBytes>,
     /// Next operator

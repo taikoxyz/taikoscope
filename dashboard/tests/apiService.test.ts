@@ -3,7 +3,6 @@ import * as toast from '../utils/toast';
 
 import {
   fetchAvgProveTime,
-  fetchActiveSequencerAddresses,
   fetchL2BlockTimes,
   fetchBlockTransactions,
   fetchAvgL2Tps,
@@ -55,12 +54,6 @@ describe('apiService', () => {
     expect(badProve.badRequest).toBe(true);
     expect(badProve.error).toStrictEqual({});
     expect(badProve.data).toBeNull();
-  });
-
-  it('fetches active sequencer addresses from preconf', async () => {
-    globalThis.fetch = mockFetch({ candidates: ['a', 'b'] });
-    const gateways = await fetchActiveSequencerAddresses('1h');
-    expect(gateways.data).toStrictEqual(['a', 'b']);
   });
 
   it('transforms block times', async () => {

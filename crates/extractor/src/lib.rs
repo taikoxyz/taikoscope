@@ -12,7 +12,7 @@ use std::{borrow::Cow, pin::Pin, sync::Arc, time::Duration};
 use alloy::{
     primitives::{Address, B256, BlockNumber, U256},
     providers::{Provider, ProviderBuilder},
-    sol_types::{SolCall, SolValue},
+    sol_types::SolCall,
 };
 use alloy_consensus::{BlockHeader, Transaction};
 use alloy_rpc_client::{ClientBuilder, RpcClient};
@@ -613,12 +613,6 @@ impl Extractor {
         Ok(timestamp)
     }
 
-    /// Get the operator candidates for the current epoch
-    pub async fn get_operator_candidates_for_current_epoch(&self) -> Result<Vec<Address>> {
-        let candidates = self.preconf_whitelist.get_operator_candidates_for_current_epoch().await?;
-        Ok(candidates)
-    }
-
     /// Calculate aggregated statistics for an L2 block by fetching its receipts.
     pub async fn get_l2_block_stats(
         &self,
@@ -814,9 +808,8 @@ fn decode_batches_proved(
 ) -> Result<chainio::BatchesProved> {
     let call = chainio::IInbox::proveCall::abi_decode(calldata)
         .map_err(|err| eyre::eyre!("decode prove calldata failed: {}", err))?;
-    let input = chainio::IInbox::ProveInput::abi_decode(&call._data)
-        .map_err(|err| eyre::eyre!("decode prove input failed: {}", err))?;
-    let commitment = input.commitment;
+    let commitment = decode_shasta_commitment_packed(&call._data)
+        .map_err(|err| eyre::eyre!("decode prove commitment failed: {}", err))?;
     let first_proposal_id = proved.firstProposalId.to::<u64>();
     let first_new_proposal_id = proved.firstNewProposalId.to::<u64>();
     let last_proposal_id = proved.lastProposalId.to::<u64>();
@@ -830,21 +823,113 @@ fn decode_batches_proved(
         .map(|(i, _)| {
             let transition = commitment.transitions.get(first_new_index + i);
             let parent_hash = if i == 0 && first_new_index == 0 {
-                commitment.firstProposalParentBlockHash
+                commitment.first_proposal_parent_block_hash
             } else {
                 B256::ZERO
             };
-            let state_root = if i + 1 == total { commitment.endStateRoot } else { B256::ZERO };
+            let state_root = if i + 1 == total { commitment.end_state_root } else { B256::ZERO };
 
             chainio::Transition {
                 parentHash: parent_hash,
-                blockHash: transition.map(|transition| transition.blockHash).unwrap_or(B256::ZERO),
+                blockHash: transition.map(|transition| transition.block_hash).unwrap_or(B256::ZERO),
                 stateRoot: state_root,
             }
         })
         .collect();
 
     Ok(chainio::BatchesProved { verifier: proved.actualProver, batchIds: batch_ids, transitions })
+}
+
+/// In-memory representation of a Shasta [`Commitment`] decoded from the packed
+/// binary `_data` blob passed to `IInbox.prove(bytes _data, bytes _proof)`.
+///
+/// Shasta does NOT ABI-encode `_data` — it is a tight, manually packed layout
+/// (confirmed against mainnet prove tx `0x70a609d0…` in L1 block 24882287):
+///
+/// ```text
+/// offset  field                           size
+/// ------  -----                           ----
+///   0     firstProposalId                 uint48 (6 bytes, big-endian)
+///   6     firstProposalParentBlockHash    bytes32
+///  38     lastProposalHash                bytes32
+///  70     actualProver                    address (20 bytes)
+///  90     endBlockNumber                  uint48 (6 bytes, big-endian)
+///  96     endStateRoot                    bytes32
+/// 128     transitionCount                 uint16 (2 bytes, big-endian)
+/// 130     transitions[]                   58 bytes each
+///                                         { address proposer (20)
+///                                         , uint48 timestamp (6)
+///                                         , bytes32 blockHash (32) }
+/// ```
+///
+/// Total size = `130 + transitionCount * 58`. Trying to `abi_decode` this as
+/// a Solidity struct fails with `type check failed for "offset (usize)"`
+/// because the first word is not an ABI offset — it's the packed
+/// `firstProposalId` followed by a raw hash. This is the root cause of the
+/// "No prove / verify data since 2026-04-02" freeze on the health dashboard.
+#[derive(Debug, Default, Clone)]
+struct ShastaCommitment {
+    first_proposal_parent_block_hash: B256,
+    end_state_root: B256,
+    transitions: Vec<ShastaTransition>,
+}
+
+#[derive(Debug, Default, Clone)]
+struct ShastaTransition {
+    block_hash: B256,
+}
+
+const SHASTA_COMMITMENT_HEADER_LEN: usize = 6 + 32 + 32 + 20 + 6 + 32 + 2;
+const SHASTA_TRANSITION_LEN: usize = 20 + 6 + 32;
+
+fn decode_shasta_commitment_packed(data: &[u8]) -> Result<ShastaCommitment> {
+    if data.len() < SHASTA_COMMITMENT_HEADER_LEN {
+        return Err(eyre::eyre!(
+            "commitment payload too short: got {} bytes, need at least {}",
+            data.len(),
+            SHASTA_COMMITMENT_HEADER_LEN
+        ));
+    }
+
+    // Header: [firstProposalId(6) | firstProposalParentBlockHash(32)
+    //        | lastProposalHash(32) | actualProver(20) | endBlockNumber(6)
+    //        | endStateRoot(32) | transitionCount(2)]
+    //
+    // We only need firstProposalParentBlockHash, endStateRoot, and the
+    // transitions' blockHashes downstream, but we still validate the full
+    // header length so malformed payloads error cleanly instead of slicing
+    // into transition data.
+    let first_proposal_parent_block_hash = B256::from_slice(&data[6..38]);
+    let end_state_root = B256::from_slice(&data[96..128]);
+    let transition_count = u16::from_be_bytes([data[128], data[129]]) as usize;
+
+    let expected_body_len = transition_count * SHASTA_TRANSITION_LEN;
+    let actual_body_len = data.len() - SHASTA_COMMITMENT_HEADER_LEN;
+    if actual_body_len != expected_body_len {
+        return Err(eyre::eyre!(
+            "commitment transitions length mismatch: header declared {} transitions \
+             ({} bytes), but payload has {} trailing bytes",
+            transition_count,
+            expected_body_len,
+            actual_body_len
+        ));
+    }
+
+    let mut transitions = Vec::with_capacity(transition_count);
+    let mut cursor = SHASTA_COMMITMENT_HEADER_LEN;
+    for _ in 0..transition_count {
+        // Transition body = [proposer(20) | timestamp(6) | blockHash(32)].
+        // Only blockHash is consumed downstream; proposer and timestamp are
+        // parsed implicitly by advancing the cursor.
+        let block_hash_start = cursor + 20 + 6;
+        let block_hash_end = block_hash_start + 32;
+        transitions.push(ShastaTransition {
+            block_hash: B256::from_slice(&data[block_hash_start..block_hash_end]),
+        });
+        cursor = block_hash_end;
+    }
+
+    Ok(ShastaCommitment { first_proposal_parent_block_hash, end_state_root, transitions })
 }
 
 /// Detects reorgs based on block numbers and hashes.
@@ -922,7 +1007,96 @@ impl ReorgDetector {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloy::primitives::B256;
+    use alloy::{hex, primitives::B256};
+
+    /// Regression test for the shasta `Proved` decode freeze observed on mainnet
+    /// 2026-04-15: the packed `_data` blob passed to `IInbox.prove(bytes,bytes)`
+    /// is NOT ABI-encoded and must be parsed by hand. Payload captured from
+    /// mainnet L1 block 24882287, tx 0x70a609d0...09f6.
+    #[test]
+    fn decodes_mainnet_shasta_commitment_payload() {
+        // 420-byte `_data` blob: 130-byte header + 5 * 58-byte transitions.
+        let hex_data = concat!(
+            // firstProposalId (uint48 = 2856)
+            "000000000b28",
+            // firstProposalParentBlockHash (bytes32)
+            "5bf3688d86e60634c8b510d30d8ad854a8d30d6c1bb3882b9670d0715e381748",
+            // lastProposalHash (bytes32)
+            "c1f858c956088438b7b9c86b04eccd6830c0c85ef2fee0b25f35a275d6900b98",
+            // actualProver (address)
+            "a5cb34b75bd72f15290ef37a01f06183e8036875",
+            // endBlockNumber (uint48 = 5534760)
+            "000000547428",
+            // endStateRoot (bytes32)
+            "13188b0792af6271e7b3ae61eaede8acb18f7111e91188c746d4513046b96f1d",
+            // transitionCount (uint16 = 5)
+            "0005",
+            // transition[0]: proposer(20) + timestamp(6) + blockHash(32)
+            "cbeb5d484b54498d3893a0c3eb790331962e9e9d",
+            "000069df2503",
+            "71eab342b226d8b772b46c50536e954ca7555e6cc748ff517d1d305722c4d157",
+            // transition[1]
+            "cbeb5d484b54498d3893a0c3eb790331962e9e9d",
+            "000069df2683",
+            "da3d513c7aa1a18f21ca86299b393f6e5aeb876e8f5e118dfaa76ea56f12da31",
+            // transition[2]
+            "cbeb5d484b54498d3893a0c3eb790331962e9e9d",
+            "000069df2803",
+            "3c1badb865ab6431221396e4b942a976c4a3e5fd4440b173ca36eb808bd973f5",
+            // transition[3]
+            "cbeb5d484b54498d3893a0c3eb790331962e9e9d",
+            "000069df2983",
+            "41b2bacbf5a61d1bc8dbd4fd1d60e0e5531c4534541d710f55829d9469250313",
+            // transition[4]
+            "cbeb5d484b54498d3893a0c3eb790331962e9e9d",
+            "000069df2b03",
+            "a84dfd955cb3380518eb6bc3bf51d89b8bc7108987b73e6acf438b068e73781d",
+        );
+        let data = hex::decode(hex_data).expect("hex payload is well-formed");
+        assert_eq!(data.len(), 420);
+
+        let c = decode_shasta_commitment_packed(&data).expect("decode succeeds");
+        assert_eq!(
+            format!("{:?}", c.first_proposal_parent_block_hash),
+            "0x5bf3688d86e60634c8b510d30d8ad854a8d30d6c1bb3882b9670d0715e381748"
+        );
+        assert_eq!(
+            format!("{:?}", c.end_state_root),
+            "0x13188b0792af6271e7b3ae61eaede8acb18f7111e91188c746d4513046b96f1d"
+        );
+        assert_eq!(c.transitions.len(), 5);
+        assert_eq!(
+            format!("{:?}", c.transitions[0].block_hash),
+            "0x71eab342b226d8b772b46c50536e954ca7555e6cc748ff517d1d305722c4d157"
+        );
+        assert_eq!(
+            format!("{:?}", c.transitions[4].block_hash),
+            "0xa84dfd955cb3380518eb6bc3bf51d89b8bc7108987b73e6acf438b068e73781d"
+        );
+    }
+
+    #[test]
+    fn decodes_zero_transition_shasta_commitment() {
+        // Minimum valid commitment: header only, zero transitions.
+        let mut data = vec![0u8; SHASTA_COMMITMENT_HEADER_LEN];
+        // transitionCount = 0 is already the default.
+        let c = decode_shasta_commitment_packed(&data).expect("decode succeeds");
+        assert_eq!(c.transitions.len(), 0);
+        // And one-byte-short payloads should error cleanly instead of panicking.
+        data.pop();
+        let err = decode_shasta_commitment_packed(&data).unwrap_err();
+        assert!(err.to_string().contains("too short"), "got: {err}");
+    }
+
+    #[test]
+    fn rejects_shasta_commitment_with_trailing_garbage() {
+        let mut data = vec![0u8; SHASTA_COMMITMENT_HEADER_LEN];
+        // Declare 1 transition but leave zero body bytes.
+        data[128] = 0;
+        data[129] = 1;
+        let err = decode_shasta_commitment_packed(&data).unwrap_err();
+        assert!(err.to_string().contains("length mismatch"), "got: {err}");
+    }
 
     #[test]
     fn initial_block() {

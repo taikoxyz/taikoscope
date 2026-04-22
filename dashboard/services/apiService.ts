@@ -155,17 +155,6 @@ export const fetchBatchPostingCadence = async (
   };
 };
 
-export const fetchActiveSequencerAddresses = async (
-  range: TimeRange = '1h',
-): Promise<RequestResult<string[]>> => {
-  const res = await fetchPreconfData(range);
-  return {
-    data: res.data?.candidates ?? null,
-    badRequest: res.badRequest,
-    error: res.error,
-  };
-};
-
 export const fetchL2Reorgs = async (
   range: TimeRange,
 ): Promise<RequestResult<number>> => {
@@ -363,7 +352,6 @@ export const fetchL1HeadBlock = async (
 };
 
 export interface PreconfData {
-  candidates: string[];
   current_operator?: string;
   next_operator?: string;
 }

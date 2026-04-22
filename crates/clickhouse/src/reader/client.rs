@@ -8,7 +8,7 @@ use derive_more::Debug;
 use eyre::{Context, Result};
 use hex::encode;
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeSet, time::Instant};
+use std::time::Instant;
 use tokio::try_join;
 use tracing::{debug, error};
 use url::Url;
@@ -258,7 +258,7 @@ impl ClickhouseReader {
     /// Get the most recent preconfiguration data
     pub async fn get_last_preconf_data(&self) -> Result<Option<PreconfData>> {
         let client = self.base.clone();
-        let sql = "SELECT slot, candidates, current_operator, next_operator FROM ?.preconf_data ORDER BY inserted_at DESC LIMIT 1";
+        let sql = "SELECT slot, current_operator, next_operator FROM ?.preconf_data ORDER BY inserted_at DESC LIMIT 1";
 
         let start = Instant::now();
         let result =
@@ -785,53 +785,6 @@ impl ClickhouseReader {
     }
 
     /// Get all active gateway addresses observed since the given cutoff time
-    pub async fn get_active_gateways_since(
-        &self,
-        since: DateTime<Utc>,
-    ) -> Result<Vec<AddressBytes>> {
-        #[derive(Row, Deserialize)]
-        struct GatewayRow {
-            candidates: Vec<AddressBytes>,
-            current_operator: Option<AddressBytes>,
-            next_operator: Option<AddressBytes>,
-        }
-
-        let client = self.base.clone();
-        let sql = "SELECT candidates, current_operator, next_operator FROM ?.preconf_data \
-             WHERE inserted_at > toDateTime64(?, 3)";
-
-        let start = Instant::now();
-        let result = client
-            .query(sql)
-            .bind(Identifier(&self.db_name))
-            .bind(since.timestamp_millis() as f64 / 1000.0)
-            .fetch_all::<GatewayRow>()
-            .await;
-
-        let duration_ms = start.elapsed().as_millis();
-        match &result {
-            Ok(rows) => {
-                debug!(query = sql, duration_ms, rows = rows.len(), "ClickHouse query executed")
-            }
-            Err(e) => error!(query = sql, duration_ms, error = %e, "ClickHouse query failed"),
-        }
-
-        let rows = result?;
-        let mut set = BTreeSet::new();
-        for row in rows {
-            for cand in row.candidates {
-                set.insert(cand);
-            }
-            if let Some(op) = row.current_operator {
-                set.insert(op);
-            }
-            if let Some(op) = row.next_operator {
-                set.insert(op);
-            }
-        }
-        Ok(set.into_iter().collect())
-    }
-
     /// Get the number of blocks produced by each sequencer since the given cutoff time
     pub async fn get_sequencer_distribution_since(
         &self,
