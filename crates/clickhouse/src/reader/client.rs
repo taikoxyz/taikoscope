@@ -2435,6 +2435,9 @@ impl ClickhouseReader {
             prove_cost: Option<u128>,
         }
 
+        let proposer_clause = proposer
+            .map(|addr| format!("AND b.proposer_addr = unhex('{}')", encode(addr)))
+            .unwrap_or_default();
         let query = format!(
             r#"
 WITH recent_batches AS (
@@ -2463,10 +2466,10 @@ SELECT
     toNullable(max(dc.cost)) AS l1_data_cost,
     toNullable(max(pc.cost)) AS prove_cost
 FROM recent_batches rb
-INNER JOIN recent_batch_blocks bb USING (batch_id)
+LEFT JOIN recent_batch_blocks bb USING (batch_id)
 LEFT JOIN {db}.l2_head_events h
        ON bb.l2_block_number = h.l2_block_number
-      AND {filter}                         -- keep reorg filter
+      AND {filter}
 LEFT JOIN {db}.l1_data_costs dc
        ON rb.batch_id = dc.batch_id AND rb.l1_block_number = dc.l1_block_number
 LEFT JOIN {db}.prove_costs pc
@@ -2476,10 +2479,8 @@ ORDER BY rb.batch_id ASC
 "#,
             db = self.db_name,
             interval = range.interval(),
+            proposer_clause = proposer_clause,
             filter = self.reorg_filter("h"),
-            proposer_clause = proposer
-                .map(|addr| format!("AND b.proposer_addr = unhex('{}')", encode(addr)))
-                .unwrap_or_default(),
         );
 
         let rows = self.execute::<RawRow>(&query).await?;
@@ -3013,19 +3014,26 @@ WITH valid_batches AS (
     WHERE l1.block_ts >= toUnixTimestamp(now64() - INTERVAL {interval})
 ),
 valid_batch_blocks AS (
-    SELECT DISTINCT bb.batch_id, bb.l2_block_number
-    FROM {db}.batch_blocks bb
-    INNER JOIN valid_batches vb USING (batch_id)
+    SELECT DISTINCT
+        vb.batch_id,
+        vb.seq_addr,
+        bb.l2_block_number
+    FROM valid_batches vb
+    LEFT JOIN {db}.batch_blocks bb USING (batch_id)
 ),
 revenues AS (
     SELECT
-        h.sequencer AS seq_addr,
+        vb.seq_addr AS seq_addr,
         sum(h.sum_priority_fee) AS priority_fee,
-        sum(h.sum_base_fee)   AS base_fee
-    FROM {db}.l2_head_events h
-    INNER JOIN valid_batch_blocks vbb ON vbb.l2_block_number = h.l2_block_number
-    WHERE {filter}
-    GROUP BY h.sequencer
+        sum(h.sum_base_fee) AS base_fee
+    FROM valid_batches vb
+    LEFT JOIN valid_batch_blocks vbb
+           ON vbb.batch_id = vb.batch_id
+          AND vbb.seq_addr = vb.seq_addr
+    LEFT JOIN {db}.l2_head_events h
+           ON vbb.l2_block_number = h.l2_block_number
+          AND {filter}
+    GROUP BY vb.seq_addr
 ),
 costs AS (
     SELECT
