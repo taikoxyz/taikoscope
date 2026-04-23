@@ -2435,7 +2435,6 @@ impl ClickhouseReader {
             prove_cost: Option<u128>,
         }
 
-        let client = self.base.clone();
         let proposer_clause = proposer
             .map(|addr| format!("AND b.proposer_addr = unhex('{}')", encode(addr)))
             .unwrap_or_default();
@@ -2447,14 +2446,14 @@ WITH recent_batches AS (
         b.l1_block_number,
         b.l1_tx_hash,
         b.proposer_addr
-    FROM ?.batches b
-    INNER JOIN ?.l1_head_events l1 ON b.l1_block_number = l1.l1_block_number
+    FROM {db}.batches b
+    INNER JOIN {db}.l1_head_events l1 ON b.l1_block_number = l1.l1_block_number
     WHERE l1.block_ts >= toUnixTimestamp(now64() - INTERVAL {interval})
     {proposer_clause}
 ),
 recent_batch_blocks AS (
     SELECT DISTINCT bb.batch_id, bb.l2_block_number
-    FROM ?.batch_blocks bb
+    FROM {db}.batch_blocks bb
     INNER JOIN recent_batches rb USING (batch_id)
 )
 SELECT
@@ -2468,42 +2467,23 @@ SELECT
     toNullable(max(pc.cost)) AS prove_cost
 FROM recent_batches rb
 LEFT JOIN recent_batch_blocks bb USING (batch_id)
-LEFT JOIN ?.l2_head_events h
+LEFT JOIN {db}.l2_head_events h
        ON bb.l2_block_number = h.l2_block_number
       AND {filter}
-LEFT JOIN ?.l1_data_costs dc
+LEFT JOIN {db}.l1_data_costs dc
        ON rb.batch_id = dc.batch_id AND rb.l1_block_number = dc.l1_block_number
-LEFT JOIN ?.prove_costs pc
+LEFT JOIN {db}.prove_costs pc
        ON rb.batch_id = pc.batch_id
 GROUP BY rb.batch_id, rb.l1_block_number, rb.l1_tx_hash, rb.proposer_addr
 ORDER BY rb.batch_id ASC
 "#,
+            db = self.db_name,
             interval = range.interval(),
             proposer_clause = proposer_clause,
             filter = self.reorg_filter("h"),
         );
 
-        let start = Instant::now();
-        let result = client
-            .query(&query)
-            .bind(Identifier(&self.db_name))
-            .bind(Identifier(&self.db_name))
-            .bind(Identifier(&self.db_name))
-            .bind(Identifier(&self.db_name))
-            .bind(Identifier(&self.db_name))
-            .bind(Identifier(&self.db_name))
-            .fetch_all::<RawRow>()
-            .await;
-
-        let duration_ms = start.elapsed().as_millis();
-        match &result {
-            Ok(rows) => {
-                debug!(query = %query, duration_ms, rows = rows.len(), "ClickHouse query executed")
-            }
-            Err(e) => error!(query = %query, duration_ms, error = %e, "ClickHouse query failed"),
-        }
-
-        let rows = result?;
+        let rows = self.execute::<RawRow>(&query).await?;
         Ok(rows
             .into_iter()
             .map(|r| BatchFeeComponentRow {
@@ -3022,7 +3002,6 @@ ORDER BY rb.batch_id ASC
 
     /// Get aggregated L2 fees grouped by sequencer for the given range
     pub async fn get_l2_fees_by_sequencer(&self, range: TimeRange) -> Result<Vec<SequencerFeeRow>> {
-        let client = self.base.clone();
         let query = format!(
             r#"
 WITH valid_batches AS (
@@ -3030,8 +3009,8 @@ WITH valid_batches AS (
         b.batch_id,
         b.proposer_addr AS seq_addr,
         b.l1_block_number
-    FROM ?.batches b
-    INNER JOIN ?.l1_head_events l1 ON b.l1_block_number = l1.l1_block_number
+    FROM {db}.batches b
+    INNER JOIN {db}.l1_head_events l1 ON b.l1_block_number = l1.l1_block_number
     WHERE l1.block_ts >= toUnixTimestamp(now64() - INTERVAL {interval})
 ),
 valid_batch_blocks AS (
@@ -3040,7 +3019,7 @@ valid_batch_blocks AS (
         vb.seq_addr,
         bb.l2_block_number
     FROM valid_batches vb
-    LEFT JOIN ?.batch_blocks bb USING (batch_id)
+    LEFT JOIN {db}.batch_blocks bb USING (batch_id)
 ),
 revenues AS (
     SELECT
@@ -3051,7 +3030,7 @@ revenues AS (
     LEFT JOIN valid_batch_blocks vbb
            ON vbb.batch_id = vb.batch_id
           AND vbb.seq_addr = vb.seq_addr
-    LEFT JOIN ?.l2_head_events h
+    LEFT JOIN {db}.l2_head_events h
            ON vbb.l2_block_number = h.l2_block_number
           AND {filter}
     GROUP BY vb.seq_addr
@@ -3062,8 +3041,8 @@ costs AS (
         sum(dc.cost) AS l1_data_cost,
         sum(pc.cost) AS prove_cost
     FROM valid_batches vb
-    LEFT JOIN ?.l1_data_costs dc ON vb.batch_id = dc.batch_id AND vb.l1_block_number = dc.l1_block_number
-    LEFT JOIN ?.prove_costs  pc ON vb.batch_id = pc.batch_id
+    LEFT JOIN {db}.l1_data_costs dc ON vb.batch_id = dc.batch_id AND vb.l1_block_number = dc.l1_block_number
+    LEFT JOIN {db}.prove_costs  pc ON vb.batch_id = pc.batch_id
     GROUP BY vb.seq_addr
 )
 SELECT
@@ -3081,31 +3060,12 @@ FROM revenues r
 FULL OUTER JOIN costs c ON r.seq_addr = c.seq_addr
 ORDER BY priority_fee DESC
 "#,
+            db = self.db_name,
             interval = range.interval(),
             filter = self.reorg_filter("h"),
         );
 
-        let start = Instant::now();
-        let result = client
-            .query(&query)
-            .bind(Identifier(&self.db_name))
-            .bind(Identifier(&self.db_name))
-            .bind(Identifier(&self.db_name))
-            .bind(Identifier(&self.db_name))
-            .bind(Identifier(&self.db_name))
-            .bind(Identifier(&self.db_name))
-            .fetch_all::<SequencerFeeRow>()
-            .await;
-
-        let duration_ms = start.elapsed().as_millis();
-        match &result {
-            Ok(rows) => {
-                debug!(query = %query, duration_ms, rows = rows.len(), "ClickHouse query executed")
-            }
-            Err(e) => error!(query = %query, duration_ms, error = %e, "ClickHouse query failed"),
-        }
-
-        result.map_err(Into::into)
+        self.execute(&query).await
     }
 
     /// Get the blob count for each batch within the given range
