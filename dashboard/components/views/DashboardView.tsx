@@ -141,7 +141,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         if (selectedSequencer && m.group === 'Sequencers') return false;
         if (isEconomicsView) return m.group === 'Network Economics';
         if (isHealthView) return m.group === 'Network Health';
-        if (isPerformanceView) return m.group === 'Network Performance';
+        if (isPerformanceView) {
+          return (
+            m.group === 'Network Performance' ||
+            m.group === 'Sequencers'
+          );
+        }
         return m.group !== 'Network Economics';
       }),
     [metricsWithHardware, selectedSequencer, isEconomicsView, isHealthView, isPerformanceView],
@@ -162,17 +167,24 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     ? ['Network Economics']
     : isHealthView
       ? ['Network Health']
-      : ['Network Performance', 'Network Health', 'Sequencers', 'Other'];
+      : isPerformanceView
+        ? ['Network Performance', 'Sequencers']
+        : ['Network Performance', 'Network Health', 'Sequencers', 'Other'];
 
   const skeletonGroupCounts: Record<string, number> = isEconomicsView
     ? { 'Network Economics': 6 }
     : isHealthView
       ? { 'Network Health': 6 }
-      : {
-        'Network Performance': 3,
-        'Network Health': 6,
-        Sequencers: 3,
-      };
+      : isPerformanceView
+        ? {
+          'Network Performance': 3,
+          Sequencers: 3,
+        }
+        : {
+          'Network Performance': 3,
+          'Network Health': 6,
+          Sequencers: 3,
+        };
 
   const displayGroupName = useCallback(
     (group: string): string => {
@@ -284,11 +296,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
     const groups: Record<string, React.ReactNode[]> = {};
 
-    if (!isHealthView) {
+    if (isPerformanceView || !isHealthView) {
       groups['Network Performance'] = performance;
     }
 
-    if (!isPerformanceView) {
+    if (isHealthView || !isPerformanceView) {
       groups['Network Health'] = health;
     }
 
