@@ -173,8 +173,12 @@ impl Client {
                     body = %body,
                     "Unexpected response when checking incident existence"
                 );
-                // For any other status, assume the incident doesn't exist on this page
-                Ok(false)
+                Err(eyre::eyre!(
+                    "HTTP error {} while checking incident existence for {}: {}",
+                    status,
+                    incident_id,
+                    body
+                ))
             }
         }
     }
@@ -414,6 +418,44 @@ mod tests {
         let client =
             Client::with_base_url("testkey".into(), "page1".into(), server.url().parse().unwrap());
         let err = client.open_incident("comp1").await.unwrap_err();
+        assert!(err.to_string().contains("500"));
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn incident_exists_returns_false_on_not_found() {
+        let mut server = Server::new_async().await;
+
+        let mock = server
+            .mock("GET", "/v1/page1/incidents/incident123")
+            .match_header("authorization", "Bearer testkey")
+            .with_status(404)
+            .with_body("not found")
+            .create_async()
+            .await;
+
+        let client =
+            Client::with_base_url("testkey".into(), "page1".into(), server.url().parse().unwrap());
+        let exists = client.incident_exists("incident123").await.unwrap();
+        assert!(!exists);
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn incident_exists_returns_err_on_unexpected_status() {
+        let mut server = Server::new_async().await;
+
+        let mock = server
+            .mock("GET", "/v1/page1/incidents/incident123")
+            .match_header("authorization", "Bearer testkey")
+            .with_status(500)
+            .with_body("server error")
+            .create_async()
+            .await;
+
+        let client =
+            Client::with_base_url("testkey".into(), "page1".into(), server.url().parse().unwrap());
+        let err = client.incident_exists("incident123").await.unwrap_err();
         assert!(err.to_string().contains("500"));
         mock.assert_async().await;
     }
